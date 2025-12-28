@@ -92,17 +92,17 @@ class OpenAIProvider(AIProvider):
         if not self.client:
              return RenderedNote(title="Заметка", content=note_text, tags=[])
 
-        format_rules = topic.format_policy_text or "Create a concise title, summarize the content, and extract tags."
+        # Для работы с системой шаблонов нам нужны чистые данные
+        # format_rules мы больше не передаем в промпт для стиля.
         
         prompt = (
-            "You are a professional editor. Format the user's raw text into a clean note.\n"
+            "You are a professional editor. Your goal is to extract structured data from the text.\n"
             f"Context (Topic): {topic.title}\n"
-            f"Formatting Rules: {format_rules}\n"
             "IMPORTANT: ALWAYS use Russian language for the title, content, and tags.\n"
             "Task:\n"
-            "1. Create a short, descriptive emoji title in Russian.\n"
-            "2. Clean up and format the content (fix grammar, use lists if appropriate) in Russian.\n"
-            "3. Extract key tags (hashtags) in Russian.\n\n"
+            "1. 'title': Create a short, descriptive emoji title in Russian (max 5-7 words).\n"
+            "2. 'content': Create a concise summary (caption) of the note in Russian. Fix grammar, remove redundancy.\n"
+            "3. 'tags': Extract key tags (hashtags) in Russian.\n\n"
             "Return JSON only: {\"title\": \"...\", \"content\": \"...\", \"tags\": [\"#tag1\", ...]}"
         )
 

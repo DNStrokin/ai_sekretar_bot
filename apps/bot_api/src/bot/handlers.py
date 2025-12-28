@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto
 from aiogram.filters import Command
@@ -14,12 +15,44 @@ from src.bot.keyboards import get_settings_keyboard, get_bind_topic_keyboard, ge
 from src.settings.config import settings
 from src.ai.openai_provider import OpenAIProvider, TopicContext
 from src.ai.gemini_provider import GeminiProvider
+from src.bot.group_commands import DEFAULT_FORMAT
 
 logger = logging.getLogger(__name__)
 
 router = Router()
 # ai_provider = OpenAIProvider()
 ai_provider = GeminiProvider()
+
+
+def format_note_content(template: str, rendered_note, original_text: str, metadata: dict = None) -> str:
+    """
+    Форматирует заметку по шаблону.
+    Поддерживает: [title], [caption], [message], [tags], [date] и метаданные.
+    """
+    if not template:
+        template = DEFAULT_FORMAT
+    
+    # Базовые переменные
+    replacements = {
+        "[title]": rendered_note.title or "",
+        "[caption]": rendered_note.content or "", # Content now acts as 'Caption'
+        "[message]": original_text,
+        "[tags]": " ".join(rendered_note.tags) if rendered_note.tags else "",
+        "[date]": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        # Legacy aliases support if any
+        "[content]": rendered_note.content or "",
+    }
+    
+    # Метаданные (например, инфо о юзере)
+    if metadata:
+        for k, v in metadata.items():
+            replacements[f"[{k}]"] = str(v)
+
+    result = template
+    for k, v in replacements.items():
+        result = result.replace(k, v)
+        
+    return result
 
 
 # ============ Private Chat Handlers ============
@@ -130,11 +163,28 @@ async def _process_group_message(message: Message):
                 asyncio.create_task(delete_later(err_msg))
                 return
 
-            # Формируем сообщение
-            note_content = (
-                f"{rendered_note.title}\n\n"
-                f"{rendered_note.content}\n\n"
-                f"{' '.join(rendered_note.tags)}"
+            # Формируем метаданные для шаблона
+            metadata = {
+                "user_id": user_id,
+                "first_name": message.from_user.first_name,
+                "last_name": message.from_user.last_name or "",
+                "username": message.from_user.username or "",
+                "full_name": message.from_user.full_name,
+                "chat_title": message.chat.title or "",
+                "topic_name": target_topic.title,
+                "message_id": message.message_id,
+                "thread_id": target_t_id,
+                "group_id": group.id,
+                # Ссылка на сообщение (если группа публичная или у бота есть доступ)
+                "url": f"https://t.me/c/{str(chat_id)[4:] if str(chat_id).startswith('-100') else chat_id}/{message.message_id}"
+            }
+
+            # Применяем шаблон
+            note_content = format_note_content(
+                target_topic.format_policy_text, 
+                rendered_note, 
+                note_text,
+                metadata
             )
 
             # Отправляем в целевую тему
@@ -217,7 +267,14 @@ async def _process_group_message(message: Message):
                 ]
                 
                 prepared_content = json.dumps({
-                    "text": text
+                    "text": text,
+                    "metadata": { # Save minimal metadata for delayed processing
+                        "user_id": user_id,
+                        "first_name": message.from_user.first_name,
+                        "last_name": message.from_user.last_name or "",
+                        "username": message.from_user.username or "",
+                        "message_id": message.message_id
+                    }
                 })
                 
                 suggested_topics_json = json.dumps(candidate_topics_info)
@@ -309,18 +366,11 @@ async def cb_confirm_topic(callback: CallbackQuery):
             
         data = json.loads(confirmation.prepared_content)
         note_text = data.get("text", "")
+        saved_metadata = data.get("metadata", {})
         
         candidates_data = json.loads(confirmation.suggested_topics)
         
-        # Нужно получить активные темы группы снова, чтобы передать контекст
-        # Группу можно найти через user.groups по chat_id или просто запросить topics если есть group_id
-        # Но у нас нет group_id прямо здесь. Найдем через user_id и chat_id
-        user = await db_service.get_or_create_user(session, callback.from_user.id)
-        group = await db_service.get_user_group(session, user.telegram_user_id) 
-        # get_user_group возвращает первую попавшуюся группу юзера? Нет, там join. 
-        # Логика get_user_group была странной (User.telegram_user_id == ...), возвращает одну группу.
-        # А юзер может быть в нескольких.
-        # Лучше найти группу по chat_id
+        # Нужно получить активные темы группы снова
         result = await session.execute(
             select(Group).where(Group.telegram_group_id == chat_id)
         )
@@ -332,9 +382,6 @@ async def cb_confirm_topic(callback: CallbackQuery):
             
         topics = await db_service.get_group_topics(session, group.id)
 
-        # Helper again (copy-paste logic or extract to module level? Module level is hard with closure vars)
-        # Let's duplicate logic for now or define simple render/send loop
-        
         target_ids = []
         if choisen_id_str == "all":
             # Выбираем ВСЕ темы из candidates
@@ -374,10 +421,24 @@ async def cb_confirm_topic(callback: CallbackQuery):
                     )
                 )
                 
-                note_content = (
-                    f"{rendered_note.title}\n\n"
-                    f"{rendered_note.content}\n\n"
-                    f"{' '.join(rendered_note.tags)}"
+                # Reconstruct metadata with currect topic info
+                metadata = saved_metadata.copy()
+                metadata.update({
+                    "topic_name": target_topic.title,
+                    "thread_id": target_t_id,
+                    "group_id": group.id,
+                    "chat_title": group.title or ""
+                })
+                # Attempt to reconstruct URL if message_id saved
+                if "message_id" in metadata:
+                     metadata["url"] = f"https://t.me/c/{str(chat_id)[4:] if str(chat_id).startswith('-100') else chat_id}/{metadata['message_id']}"
+
+                # Применяем шаблон
+                note_content = format_note_content(
+                    target_topic.format_policy_text, 
+                    rendered_note, 
+                    note_text,
+                    metadata
                 )
                 
                 await callback.message.bot.send_message(
