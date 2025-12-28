@@ -16,17 +16,19 @@ from alembic import context
 # Добавляем путь к src в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Загружаем .env из корня проекта
-from dotenv import load_dotenv
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-load_dotenv(os.path.join(project_root, ".env"))
+# Загружаем .env ТОЛЬКО если не в продакшене (нет DATABASE_URL в окружении)
+# Это позволяет облачным переменным иметь приоритет
+if not os.getenv("DATABASE_URL"):
+    from dotenv import load_dotenv
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    load_dotenv(os.path.join(project_root, ".env"))
 
-# Импортируем Base (без settings, чтобы избежать проблем с asyncpg)
+# Импортируем Base
 from src.db.models import Base, User, Group, Topic, AISettings, PendingConfirmation
 
 config = context.config
 
-# Получаем DATABASE_URL напрямую из env и конвертируем в sync
+# Получаем DATABASE_URL из окружения и конвертируем в sync
 database_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/sekretar")
 sync_url = database_url.replace("+asyncpg", "+psycopg2")
 config.set_main_option("sqlalchemy.url", sync_url)
