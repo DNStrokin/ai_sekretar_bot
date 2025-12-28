@@ -9,6 +9,7 @@ Group Topic Commands
 """
 
 import logging
+import html
 from aiogram import Router, F, Bot
 from aiogram.types import (
     Message, CallbackQuery, BotCommand, 
@@ -276,13 +277,14 @@ async def _show_format_menu(message_or_obj, state: FSMContext, topic_id: int):
         topic = await db_service.get_or_create_topic(session, group.id, topic_id)
         
         current = topic.format_policy_text or DEFAULT_FORMAT
+        current_escaped = html.escape(current)
         
         await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=message.message_id)
         await state.set_state(TopicFormatState.waiting_for_format)
         
         text = (
             f"📋 <b>Формат заметок</b>\n\n"
-            f"Текущий шаблон:\n<pre>{current}</pre>\n\n"
+            f"Текущий шаблон:\n<code>{current_escaped}</code>\n\n"
             f"<b>Доступные переменные:</b>\n"
             f"• <code>[title]</code> - Заголовок (генерируется AI)\n"
             f"• <code>[caption]</code> - Краткая выжимка (генерируется AI)\n"
