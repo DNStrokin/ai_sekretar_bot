@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  # ============ Bot API ============
+  bot-api:
+    build:
+      context: ./apps/bot_api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_GROUP_ID=${TELEGRAM_GROUP_ID}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - USE_POLLING=${USE_POLLING:-true}
+      - DEBUG=${DEBUG:-false}
