@@ -57,35 +57,35 @@ class GeminiProvider(AIProvider):
             "Return JSON only: {\"id\": <topic_id>, \"confidence\": <0.0-1.0>}"
         )
 
-        try:
-            # Gemini требует явного указания MIME типа для JSON режима в некоторых версиях,
-            # но простой промпт "Return JSON only" обычно работает.
-            # Для надежности можно использовать generation_config={'response_mime_type': 'application/json'}
-            # если модель поддерживает. gemini-1.5-flash поддерживает.
-            
-            response = await self.model.generate_content_async(
-                [prompt, note_text],
-                generation_config={"response_mime_type": "application/json"}
-            )
-            
-            content = response.text
-            data = json.loads(content)
-            
-            topic_id = data.get("id", 0)
-            
-            # Валидация
-            if topic_id != 0 and not any(t.topic_id == topic_id for t in topics):
-                topic_id = 0
-            
-            return ClassificationResult(
-                suggested_topic_id=topic_id,
-                top_topics=[{"topic_id": topic_id, "confidence": data.get("confidence", 0.0)}],
-                need_new_topic=(topic_id == 0)
-            )
+        # try:
+        # Gemini требует явного указания MIME типа для JSON режима в некоторых версиях,
+        # но простой промпт "Return JSON only" обычно работает.
+        # Для надежности можно использовать generation_config={'response_mime_type': 'application/json'}
+        # если модель поддерживает. gemini-1.5-flash поддерживает.
+        
+        response = await self.model.generate_content_async(
+            [prompt, note_text],
+            generation_config={"response_mime_type": "application/json"}
+        )
+        
+        content = response.text
+        data = json.loads(content)
+        
+        topic_id = data.get("id", 0)
+        
+        # Валидация
+        if topic_id != 0 and not any(t.topic_id == topic_id for t in topics):
+            topic_id = 0
+        
+        return ClassificationResult(
+            suggested_topic_id=topic_id,
+            top_topics=[{"topic_id": topic_id, "confidence": data.get("confidence", 0.0)}],
+            need_new_topic=(topic_id == 0)
+        )
 
-        except Exception as e:
-            logger.error(f"Error classifying note with Gemini: {e}")
-            return ClassificationResult(suggested_topic_id=0, top_topics=[], need_new_topic=True)
+        # except Exception as e:
+        #     logger.error(f"Error classifying note with Gemini: {e}")
+        #     return ClassificationResult(suggested_topic_id=0, top_topics=[], need_new_topic=True)
 
     async def render_note(
         self,
@@ -109,31 +109,31 @@ class GeminiProvider(AIProvider):
             "Return JSON only: {\"title\": \"...\", \"content\": \"...\", \"tags\": [\"#tag1\", ...]}"
         )
 
-        try:
-            response = await self.model.generate_content_async(
-                [prompt, note_text],
-                generation_config={"response_mime_type": "application/json"}
-            )
-            
-            content = response.text
-            data = json.loads(content)
-            
-            title = data.get("title", "Заметка")
-            formatted_content = data.get("content", note_text)
-            tags = data.get("tags", [])
-            
-            # Ensure tags start with #
-            formatted_tags = [t if t.startswith('#') else f"#{t}" for t in tags]
-            
-            return RenderedNote(
-                title=title,
-                content=formatted_content,
-                tags=formatted_tags
-            )
+        # try:
+        response = await self.model.generate_content_async(
+            [prompt, note_text],
+            generation_config={"response_mime_type": "application/json"}
+        )
+        
+        content = response.text
+        data = json.loads(content)
+        
+        title = data.get("title", "Заметка")
+        formatted_content = data.get("content", note_text)
+        tags = data.get("tags", [])
+        
+        # Ensure tags start with #
+        formatted_tags = [t if t.startswith('#') else f"#{t}" for t in tags]
+        
+        return RenderedNote(
+            title=title,
+            content=formatted_content,
+            tags=formatted_tags
+        )
 
-        except Exception as e:
-            logger.error(f"Error rendering note with Gemini: {e}")
-            return RenderedNote(title="Заметка", content=note_text, tags=[])
+        # except Exception as e:
+        #     logger.error(f"Error rendering note with Gemini: {e}")
+        #     return RenderedNote(title="Заметка", content=note_text, tags=[])
 
     async def transcribe_voice(self, audio_data: bytes) -> str:
         """Transcribe using Gemini (multimodal)."""

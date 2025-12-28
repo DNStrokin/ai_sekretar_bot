@@ -111,29 +111,44 @@ async def _process_group_message(message: Message):
             ]
             
             # Классификация
-            classification = await ai_provider.classify_note(text, ai_topics)
+            try:
+                classification = await ai_provider.classify_note(text, ai_topics)
+            except Exception as e:
+                logger.error(f"Classification failed: {e}")
+                await message.answer(f"⚠️ <b>Ошибка AI (классификация):</b>\n{str(e)}")
+                return
+
             target_topic_id = classification.suggested_topic_id
             
+            logger.info(f"Target topic ID: {target_topic_id}")
+            
             if target_topic_id == 0:
-                # AI не нашел куда положить (или предложил создать новую)
-                # Пока просто оставляем в General или шлем уведомление?
-                # По ТЗ: "удаляет сообщение из этой темы буфера, чтобы там не было мусора"
-                # Если удалить и не сохранить — потеря данных. 
-                # Оставим пока в General, если не смогли определить.
+                await message.answer(
+                    f"⚠️ <b>Не удалось определить тему</b>\n\n"
+                    f"AI не нашел подходящей темы для: <i>{text[:50]}...</i>\n"
+                    f"Активные темы: {', '.join([t.title for t in topics])}"
+                )
                 return
 
             # Нашли тему! Форматируем заметку
             target_topic = next((t for t in topics if t.telegram_topic_id == target_topic_id), None)
             
-            rendered_note = await ai_provider.render_note(
-                text, 
-                TopicContext(
-                    topic_id=target_topic.telegram_topic_id,
-                    title=target_topic.title,
-                    description=target_topic.description,
-                    format_policy_text=target_topic.format_policy_text
+            await message.answer(f"✅ Тема определена: <b>{target_topic.title}</b>. Форматирую...")
+            
+            try:
+                rendered_note = await ai_provider.render_note(
+                    text, 
+                    TopicContext(
+                        topic_id=target_topic.telegram_topic_id,
+                        title=target_topic.title,
+                        description=target_topic.description,
+                        format_policy_text=target_topic.format_policy_text
+                    )
                 )
-            )
+            except Exception as e:
+                logger.error(f"Rendering failed: {e}")
+                await message.answer(f"⚠️ <b>Ошибка AI (форматирование):</b>\n{str(e)}")
+                return
             
             # Формируем сообщение
             note_content = (
@@ -155,6 +170,8 @@ async def _process_group_message(message: Message):
                 )
                 logger.info(f"Сообщение перемещено из General в тему {target_topic_id}")
                 
+                await message.answer(f"🚀 Заметка отправлена в тему <b>{target_topic.title}</b>")
+                
                 # Удаляем из General
                 try:
                     await message.delete()
@@ -163,6 +180,7 @@ async def _process_group_message(message: Message):
                     
             except Exception as e:
                 logger.error(f"Ошибка при перемещении заметки: {e}")
+                await message.answer(f"⚠️ <b>Ошибка отправки:</b>\n{str(e)}")
             
             return
 
