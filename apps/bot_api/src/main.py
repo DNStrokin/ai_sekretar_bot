@@ -14,9 +14,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from src.settings.config import settings
-from bot.handlers import router as bot_router
-from webapp.api import router as webapp_router
-from db.database import init_db
+from src.bot.handlers import router as bot_router
+from src.webapp.api import router as webapp_router
+from src.db.database import init_db, get_async_session_maker
 
 
 logging.basicConfig(
@@ -37,22 +37,27 @@ dp.include_router(bot_router)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: startup and shutdown events."""
+    """Жизненный цикл приложения: startup и shutdown."""
     # Startup
-    logger.info("Starting application...")
+    logger.info("Запуск приложения...")
     await init_db()
     
-    # Start polling in background (для разработки)
+    # Запуск polling в фоне (для разработки)
     # В production используется webhook
     if settings.USE_POLLING:
         polling_task = asyncio.create_task(dp.start_polling(bot))
+        logger.info("Бот запущен в режиме polling")
     
     yield
     
     # Shutdown
-    logger.info("Shutting down application...")
+    logger.info("Остановка приложения...")
     if settings.USE_POLLING:
         polling_task.cancel()
+        try:
+            await polling_task
+        except asyncio.CancelledError:
+            pass
     await bot.session.close()
 
 
