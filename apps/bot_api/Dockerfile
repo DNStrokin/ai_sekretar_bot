@@ -17,6 +17,9 @@ COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini .
 
+# Copy static files (WebApp)
+COPY static/ ./static/
+
 # Set Python path
 ENV PYTHONPATH=/app
 
