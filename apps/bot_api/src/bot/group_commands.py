@@ -24,7 +24,8 @@ from src.bot.states import TopicInitState, TopicRulesState, TopicFormatState
 from src.bot.keyboards import (
     get_topic_settings_keyboard, 
     get_cancel_keyboard, 
-    get_bind_topic_keyboard
+    get_bind_topic_keyboard,
+    get_close_keyboard
 )
 
 logger = logging.getLogger(__name__)
@@ -329,6 +330,7 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str, 
              await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
 
 
+
 # ============ /info Command ============
 
 @group_router.message(Command("info"), F.chat.type.in_({"group", "supergroup"}))
@@ -338,6 +340,17 @@ async def cmd_topic_info(message: Message, state: FSMContext):
     """
     await delete_message_safe(message)
     
+    # Сначала проверяем, является ли это General топик (thread_id=None)
+    # Если это General — отправляем инфо о буфере
+    if is_group_forum(message) and message.message_thread_id is None:
+        await message.answer(
+            "📨 <b>Входящий буфер</b>\n\n"
+            "Это основная тема группы. Бот использует её как буфер для сортировки.\n"
+            "Отправляйте сюда сообщения, и бот автоматически перенесет их в нужную тему.",
+            reply_markup=get_close_keyboard()
+        )
+        return
+
     if not is_group_forum(message):
         return
     
@@ -388,6 +401,7 @@ async def cmd_topic_info(message: Message, state: FSMContext):
             f"Статус: {status}",
             reply_markup=get_topic_settings_keyboard(topic_id)
         )
+
 
 
 # ============ Callback Handlers ============

@@ -13,6 +13,13 @@ def get_topic_settings_keyboard(topic_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+def get_close_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура только с кнопкой закрытия."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Закрыть", callback_data="close_message")]
+    ])
+
+
 def get_cancel_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура с кнопкой отмены для диалогов."""
     return InlineKeyboardMarkup(inline_keyboard=[
