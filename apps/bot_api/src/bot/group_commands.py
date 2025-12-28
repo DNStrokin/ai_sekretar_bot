@@ -433,7 +433,7 @@ async def cmd_topic_info(message: Message, state: FSMContext):
         await message.answer(
             f"ℹ️ <b>Настройки темы</b>\n\n"
             f"📝 <b>Описание:</b>\n{description}\n\n"
-            f"📋 <b>Формат:</b>\n{format_text}\n\n"
+            f"📋 <b>Формат:</b>\n<pre>{html.escape(format_text)}</pre>\n\n"
             f"Статус: {status}",
             reply_markup=get_topic_settings_keyboard(topic_id)
         )
