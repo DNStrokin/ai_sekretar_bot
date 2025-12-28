@@ -67,8 +67,7 @@ def is_group_forum(message: Message) -> bool:
     """Проверить что сообщение из форума группы."""
     return (
         message.chat.type in ("group", "supergroup") and
-        getattr(message.chat, 'is_forum', False) and
-        message.message_thread_id is not None
+        getattr(message.chat, 'is_forum', False)
     )
 
 
@@ -340,9 +339,11 @@ async def cmd_topic_info(message: Message, state: FSMContext):
     """
     await delete_message_safe(message)
     
-    # Сначала проверяем, является ли это General топик (thread_id=None)
+    # Сначала проверяем, является ли это General топик (thread_id=None или 1)
     # Если это General — отправляем инфо о буфере
-    if is_group_forum(message) and message.message_thread_id is None:
+    # Примечание: is_group_forum теперь не требует thread_id, но мы проверим его явно ниже для других команд
+    
+    if is_group_forum(message) and (message.message_thread_id is None or message.message_thread_id == 1):
         await message.answer(
             "📨 <b>Входящий буфер</b>\n\n"
             "Это основная тема группы. Бот использует её как буфер для сортировки.\n"
@@ -351,7 +352,7 @@ async def cmd_topic_info(message: Message, state: FSMContext):
         )
         return
 
-    if not is_group_forum(message):
+    if not is_group_forum(message) or message.message_thread_id is None:
         return
     
     topic_id = message.message_thread_id
