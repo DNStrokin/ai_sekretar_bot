@@ -50,7 +50,6 @@ async def setup_bot_commands(bot: Bot):
     # Команды для групп
     group_commands = [
         BotCommand(command="info", description="ℹ️ Настройки темы"),
-        BotCommand(command="format", description="📋 Формат заметок"),
     ]
     
     # Устанавливаем команды
@@ -306,11 +305,13 @@ async def _show_format_menu(message_or_obj, state: FSMContext, topic_id: int):
             f"• &lt;i&gt;курсив&lt;/i&gt; → <i>курсив</i>\n"
             f"• &lt;u&gt;подчеркнутый&lt;/u&gt; → <u>подчеркнутый</u>\n"
             f"• &lt;s&gt;зачеркнутый&lt;/s&gt; → <s>зачеркнутый</s>\n"
-            f"• &lt;code&gt;код&lt;/code&gt; → <code>код</code>\n"
+            f"• &lt;code&gt;код&lt;/code&gt; → <code>код</code> (копируется при клике)\n"
+            f"• &lt;pre&gt;блок&lt;/pre&gt; → блок кода (копируется)\n"
+            f"• &lt;blockquote&gt;цитата&lt;/blockquote&gt; → <blockquote>цитата</blockquote>\n"
             f"• &lt;a href='URL'&gt;ссылка&lt;/a&gt; → <a href='https://t.me'>ссылка</a>\n\n"
             f"<b>Примеры шаблонов:</b>\n"
             f"1. <b>[title]</b>\n[caption]\n\n"
-            f"2. <i>[date]</i> | [title]\n[tags]\n\n"
+            f"2. <i>[date]</i> | [title]\n&lt;blockquote&gt;[message]&lt;/blockquote&gt;\n\n"
             f"Введите новый шаблон:"
         )
 
