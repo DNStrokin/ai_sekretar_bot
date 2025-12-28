@@ -284,7 +284,7 @@ async def _show_format_menu(message_or_obj, state: FSMContext, topic_id: int):
         
         text = (
             f"📋 <b>Формат заметок</b>\n\n"
-            f"Текущий шаблон:\n<code>{current_escaped}</code>\n\n"
+            f"Текущий шаблон:\n<pre>{current_escaped}</pre>\n\n"
             f"<b>Доступные переменные:</b>\n"
             f"• <code>[title]</code> - Заголовок (генерируется AI)\n"
             f"• <code>[caption]</code> - Краткая выжимка (генерируется AI)\n"
