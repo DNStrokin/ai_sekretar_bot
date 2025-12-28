@@ -98,3 +98,13 @@ async def create_topic(
     session.add(topic)
     await session.commit()
     return topic
+
+async def get_group_topics(session: AsyncSession, group_id: int) -> list[Topic]:
+    """Получить все активные темы группы."""
+    result = await session.execute(
+        select(Topic).where(
+            Topic.group_id == group_id,
+            Topic.is_active == True
+        )
+    )
+    return list(result.scalars().all())

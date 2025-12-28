@@ -1,333 +1,189 @@
-"""
-Telegram Bot Handlers
-
-Обрабатывает входящие сообщения от пользователя.
-"""
-
-import os
 import logging
 from aiogram import Router, F, Bot
-from aiogram.types import (
-    Message, CallbackQuery, ChatMemberUpdated,
-    InlineKeyboardButton, InlineKeyboardMarkup
-)
-from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
+from aiogram.types import Message, CallbackQuery, InputMediaPhoto
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 
 from src.db.database import get_async_session_maker
+from src.db.models import Group, Topic
 from src.services import db_service
 from src.bot.keyboards import get_settings_keyboard, get_bind_topic_keyboard
+from src.settings.config import settings
+from src.ai.openai_provider import OpenAIProvider, TopicContext
 
 logger = logging.getLogger(__name__)
 
 router = Router()
+ai_provider = OpenAIProvider()
 
 
-# ============ DEBUG: Логирование всех сообщений ============
+# ============ Private Chat Handlers ============
 
-@router.message()
-async def debug_log_all_messages(message: Message):
-    """Отладочный обработчик — логирует ВСЕ входящие сообщения."""
-    chat_type = message.chat.type
-    chat_id = message.chat.id
-    thread_id = message.message_thread_id
-    user_id = message.from_user.id if message.from_user else None
-    text = (message.text or "")[:50]
-    
-    logger.info(f"[DEBUG] Сообщение: chat_type={chat_type}, chat_id={chat_id}, thread={thread_id}, user={user_id}, text='{text}'")
-    
-    # Если это группа — обрабатываем захват тем
-    if chat_type in ("group", "supergroup"):
-        await _process_group_message(message)
-
-
-@router.my_chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
-async def on_bot_added_to_chat(event: ChatMemberUpdated, bot: Bot):
-    """
-    Обработчик добавления бота в группу/чат.
-    Автоматически сохраняет ID группы в базу данных.
-    """
-    chat = event.chat
-    
-    # Проверяем, что это группа или супергруппа
-    if chat.type not in ("group", "supergroup"):
-        return
-    
-    is_forum = getattr(chat, 'is_forum', False)
-    owner_id = event.from_user.id
-    
-    logger.info(f"Бот добавлен в группу: {chat.title} (ID: {chat.id}, Форум: {is_forum})")
-    
-    # Сохраняем в БД
-    try:
-        session_maker = get_async_session_maker()
-        async with session_maker() as session:
-            # Получаем или создаём пользователя
-            user = await db_service.get_or_create_user(session, owner_id)
-            
-            # Сохраняем группу
-            group = await db_service.get_or_create_group(
-                session, 
-                user.id, 
-                chat.id, 
-                chat.title,
-                is_forum
-            )
-            
-            logger.info(f"Группа сохранена в БД: {group.telegram_group_id}")
-        
-        # Отправляем сообщение пользователю
-        await bot.send_message(
-            owner_id,
-            f"✅ <b>Группа подключена и сохранена!</b>\n\n"
-            f"📋 <b>Название:</b> {chat.title}\n"
-            f"🆔 <b>ID группы:</b> <code>{chat.id}</code>\n"
-            f"📁 <b>Темы (форум):</b> {'Да ✓' if is_forum else 'Нет'}\n\n"
-            f"{'⚠️ Рекомендуется включить темы в настройках группы!' if not is_forum else '👍 Всё готово к работе!'}"
-        )
-    except Exception as e:
-        logger.error(f"Ошибка при сохранении группы: {e}")
-        try:
-            await bot.send_message(
-                owner_id,
-                f"⚠️ Группа обнаружена, но возникла ошибка при сохранении.\n"
-                f"ID группы: <code>{chat.id}</code>"
-            )
-        except:
-            pass
-
-
-@router.message(Command("group_id"))
-async def cmd_group_id(message: Message):
-    """Показать ID группы пользователя."""
-    chat = message.chat
-    
-    if chat.type == "private":
-        # Получаем группу из БД
-        session_maker = get_async_session_maker()
-        async with session_maker() as session:
-            group = await db_service.get_user_group(session, message.from_user.id)
-            
-            if group:
-                await message.answer(
-                    f"✅ <b>Ваша группа:</b>\n\n"
-                    f"📋 <b>Название:</b> {group.title}\n"
-                    f"🆔 <b>ID:</b> <code>{group.telegram_group_id}</code>\n"
-                    f"📁 <b>Темы:</b> {'Да ✓' if group.topics_enabled else 'Нет'}"
-                )
-            else:
-                await message.answer(
-                    "❌ Группа ещё не подключена.\n\n"
-                    "Добавьте бота в группу, и я автоматически её сохраню."
-                )
-    else:
-        is_forum = getattr(chat, 'is_forum', False)
-        await message.answer(
-            f"📋 <b>Информация о чате:</b>\n\n"
-            f"🆔 <b>ID:</b> <code>{chat.id}</code>\n"
-            f"📁 <b>Тип:</b> {chat.type}\n"
-            f"📁 <b>Темы (форум):</b> {'Да ✓' if is_forum else 'Нет'}"
-        )
-
-
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    """Обработка команды /start."""
-    # Создаём пользователя в БД при первом старте
-    session_maker = get_async_session_maker()
-    async with session_maker() as session:
-        await db_service.get_or_create_user(session, message.from_user.id)
-    
+@router.message(Command("start"), F.chat.type == "private")
+async def cmd_start_private(message: Message):
+    """Command /start in private chat."""
+    user_name = message.from_user.first_name
     await message.answer(
-        "👋 Привет! Я твой личный AI-секретарь.\n\n"
-        "Отправь мне любую информацию (текст, голосовое, ссылку или файл), "
-        "и я помогу её структурировать и сохранить в нужную тему.\n\n"
-        "📌 <b>Первые шаги:</b>\n"
-        "1. Добавь меня в группу с темами\n"
-        "2. Используй /group_id чтобы проверить подключение\n"
-        "3. Отправляй мне информацию для сохранения"
+        f"Привет, {user_name}! 👋\n\n"
+        "Я AI Секретарь — помогаю организовывать заметки в ваших группах.\n"
+        "Добавьте меня в группу и я помогу навести порядок!"
     )
 
 
-@router.message(Command("help"))
-async def cmd_help(message: Message):
-    """Обработка команды /help."""
-    await message.answer(
-        "📚 <b>Как пользоваться ботом:</b>\n\n"
-        "1. Отправь мне информацию в любом формате\n"
-        "2. Я предложу тему для сохранения\n"
-        "3. Подтверди или выбери другую тему\n"
-        "4. Я сохраню структурированную заметку в группу\n\n"
-        "<b>Команды:</b>\n"
-        "/start - начать работу\n"
-        "/help - справка\n"
-        "/group_id - показать подключённую группу\n"
-        "/settings - настройки"
-    )
-
-
-@router.message(Command("settings"))
+@router.message(Command("settings"), F.chat.type == "private")
 async def cmd_settings(message: Message):
-    """Обработка команды /settings — открытие WebApp."""
-    # URL WebApp (относительный путь на том же сервере)
-    # В production это будет https://your-app.timeweb.cloud/webapp
-    webapp_url = os.getenv("WEBAPP_URL", "https://your-app.timeweb.cloud/webapp")
-    
+    """Open settings Mini App."""
+    if not settings.TELEGRAM_WEBHOOK_URL:
+         await message.answer("⚠️ Настройки временно недоступны (не задан URL)")
+         return
+         
+    webapp_url = f"{settings.TELEGRAM_WEBHOOK_URL}/webapp"
     await message.answer(
-        "⚙️ <b>Настройки бота</b>\n\n"
-        "Нажмите кнопку ниже, чтобы открыть панель настроек.\n"
-        "Там вы можете:\n"
-        "• Управлять темами группы\n"
-        "• Настроить AI-провайдера\n"
-        "• Изменить уровень краткости",
+        "Настройки бота:",
         reply_markup=get_settings_keyboard(webapp_url)
     )
 
 
-@router.message(F.text)
-async def handle_text(message: Message):
-    """Обработка текстовых сообщений."""
-    if message.chat.type != "private":
-        return
+# ============ Group Chat Handlers ============
+
+def is_group_forum(message: Message) -> bool:
+    """
+    Проверяет, является ли чат супергруппой (форумом).
     
-    # TODO: Implement text processing pipeline
-    await message.answer(
-        "📝 Получил твоё сообщение. Обрабатываю...\n\n"
-        "<i>(Полная логика будет реализована позже)</i>"
+    Для обработки General топика, message_thread_id может быть None.
+    Но сам чат должен быть форумом.
+    """
+    return (
+        message.chat.type in ("group", "supergroup") and
+        getattr(message.chat, 'is_forum', False)
     )
 
-
-@router.message(F.voice)
-async def handle_voice(message: Message):
-    """Обработка голосовых сообщений."""
-    if message.chat.type != "private":
-        return
-    
-    await message.answer(
-        "🎤 Получил голосовое сообщение. Распознаю...\n\n"
-        "<i>(STT будет реализован позже)</i>"
-    )
-
-
-@router.message(F.document | F.photo)
-async def handle_file(message: Message):
-    """Обработка файлов и изображений."""
-    if message.chat.type != "private":
-        return
-    
-    await message.answer(
-        "📎 Получил файл. Обрабатываю...\n\n"
-        "<i>(Обработка файлов будет реализована позже)</i>"
-    )
-
-
-@router.callback_query()
-async def handle_callback(callback: CallbackQuery):
-    """Обработка callback-кнопок."""
-    await callback.answer("Обработка...")
-
-
-# ============ Group Message Handler (для захвата тем) ============
 
 async def _process_group_message(message: Message):
     """
-    Внутренняя функция обработки сообщений в группе.
-    Автоматически добавляет темы в БД при получении сообщений.
-    Также привязывает группу к пользователю если она ещё не привязана.
+    Обработка сообщения в группе (форуме).
+    
+    Логика:
+    1. Если это General (thread_id=None) -> AI Маршрутизация
+    2. Если это Топик (thread_id != None) -> Просто сохраняем/обрабатываем как заметку в этот топик
     """
-    logger.info(f"[GROUP] Обрабатываем сообщение: chat_id={message.chat.id}, thread={message.message_thread_id}")
-    
-    chat = message.chat
-    is_forum = getattr(chat, 'is_forum', False)
-    
-    # Сохраняем группу и тему в БД
+    if not is_group_forum(message):
+        return
+
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    topic_id = message.message_thread_id
+    text = message.text or message.caption
+
+    if not text:
+        return
+
+    # Игнорируем команды (они обрабатываются в group_commands.py)
+    if text.startswith("/"):
+        return
+
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        # Получаем/создаем группу
-        # Важно: если user_id есть, это хорошо, но в группе может писать кто угодно
-        # Поэтому сначала пробуем найти группу по ID
-        # Если message.from_user есть — используем его
-        
-        user_id = message.from_user.id if message.from_user else 0
-        if user_id:
-             await db_service.get_or_create_user(session, user_id)
+        # Получаем/создаем пользователя и группу
+        user = await db_service.get_or_create_user(session, user_id)
+        group = await db_service.get_or_create_group(session, user.id, chat_id, message.chat.title, is_forum=True)
 
-        # Здесь логика немного сложнее: мы не всегда хотим создавать группу, если её нет, 
-        # только если мы знаем owner'а (например админа). 
-        # Но в оригинале мы создавали группу, если её нет, и привязывали к текущему юзеру.
-        # Оставим пока как было:
-        
-        group = await db_service.get_or_create_group(
-             session, 
-             user_id=user_id, 
-             chat_id=chat.id, 
-             title=chat.title or "Без названия", 
-             is_forum=is_forum
-        )
-        
-        if not group:
-            logger.warning(f"[GROUP] Не удалось создать или найти группу {chat.id}")
-            return
-        
-        # Если это не форум или нет thread_id — просто выходим
-        if not is_forum or not message.message_thread_id:
-            logger.info(f"[GROUP] is_forum={is_forum}, thread_id={message.message_thread_id}, пропускаем добавление темы")
-            return
-        
-        topic_id = message.message_thread_id
-        topic_name = None
-        
-        # Пробуем получить название темы
-        if message.forum_topic_created:
-            topic_name = message.forum_topic_created.name
-        elif message.forum_topic_edited:
-            topic_name = message.forum_topic_edited.name
-        else:
-            topic_name = f"Тема #{topic_id}"
-        
-        logger.info(f"[GROUP] topic_id={topic_id}, topic_name={topic_name}")
-        
-        # Проверяем существует ли тема
-        topic = await db_service.get_topic(session, group.id, topic_id)
-        
-        if not topic:
-            # Создаём новую тему
-            await db_service.create_topic(session, group.id, topic_id, topic_name)
-            logger.info(f"[GROUP] Добавлена тема: {topic_name} (id={topic_id})")
+        # Сценарий 1: Сообщение в General (Буфер) => Маршрутизация
+        if topic_id is None:
+            # Получаем список активных тем
+            topics = await db_service.get_group_topics(session, group.id)
             
-            # Предлагаем настроить тему с инлайн кнопкой
+            if not topics:
+                # Нет тем для сортировки — ничего не делаем или просим создать
+                return
+
+            # Подготавливаем контекст для AI
+            ai_topics = [
+                TopicContext(
+                    topic_id=t.telegram_topic_id,
+                    title=t.title,
+                    description=t.description
+                ) for t in topics
+            ]
+            
+            # Классификация
+            classification = await ai_provider.classify_note(text, ai_topics)
+            target_topic_id = classification.suggested_topic_id
+            
+            if target_topic_id == 0:
+                # AI не нашел куда положить (или предложил создать новую)
+                # Пока просто оставляем в General или шлем уведомление?
+                # По ТЗ: "удаляет сообщение из этой темы буфера, чтобы там не было мусора"
+                # Если удалить и не сохранить — потеря данных. 
+                # Оставим пока в General, если не смогли определить.
+                return
+
+            # Нашли тему! Форматируем заметку
+            target_topic = next((t for t in topics if t.telegram_topic_id == target_topic_id), None)
+            
+            rendered_note = await ai_provider.render_note(
+                text, 
+                TopicContext(
+                    topic_id=target_topic.telegram_topic_id,
+                    title=target_topic.title,
+                    description=target_topic.description,
+                    format_policy_text=target_topic.format_policy_text
+                )
+            )
+            
+            # Формируем сообщение
+            note_content = (
+                f"{rendered_note.title}\n\n"
+                f"{rendered_note.content}\n\n"
+                f"{' '.join(rendered_note.tags)}\n"
+                f"👤 <a href='tg://user?id={user_id}'>{message.from_user.first_name}</a>"
+            )
+            
+            # Отправляем в целевую тему
+            try:
+                await message.bot.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=target_topic_id,
+                    text=note_content,
+                    parse_mode="HTML"
+                )
+                logger.info(f"Сообщение перемещено из General в тему {target_topic_id}")
+                
+                # Удаляем из General
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+                    
+            except Exception as e:
+                logger.error(f"Ошибка при перемещении заметки: {e}")
+            
+            return
+
+
+        # Сценарий 2: Сообщение уже внутри темы => Обработка заметки (если нужно)
+        # Здесь логика старая — либо просто "окей", либо авто-форматирование
+        topic = await db_service.get_topic(session, group.id, topic_id)
+
+        if not topic:
+            # Новая тема, которой нет в БД
+            # Создадим её, но пометим как не настроенную
+            topic = await db_service.create_topic(session, group.id, topic_id)
+            
+            # Предлагаем настроить тему с инлайн кнопкой (с опцией скрыть)
             await message.answer(
                 "👋 Вижу новую тему!\n\n"
                 "Хотите настроить её для бота?",
                 reply_markup=get_bind_topic_keyboard(topic_id)
             )
+            return
+
+        # Если тема есть и активна — тут можно было бы тоже форматировать,
+        # но пока оставим как есть (просто логирование или сохранение)
+        logger.info(f"Сообщение в теме {topic_id}: {text[:20]}...")
 
 
-@router.message(Command("sync"))
-async def cmd_sync_topics(message: Message, bot: Bot):
-    """Команда /sync — синхронизация тем группы."""
-    chat = message.chat
-    
-    if chat.type == "private":
-        await message.answer(
-            "❌ Эту команду нужно выполнить в группе с темами.\n"
-            "Добавьте бота в группу и напишите /sync там."
-        )
-        return
-    
-    is_forum = getattr(chat, 'is_forum', False)
-    if not is_forum:
-        await message.answer(
-            "❌ Эта группа не является форумом.\n"
-            "Включите темы в настройках группы."
-        )
-        return
-    
-    # Получаем список тем через сообщения
-    await message.answer(
-        "🔄 <b>Синхронизация тем</b>\n\n"
-        "Бот автоматически добавляет темы, когда видит сообщения в них.\n\n"
-        "Чтобы синхронизировать все темы:\n"
-        "1. Отправьте любое сообщение в каждой теме\n"
-        "2. Или просто используйте бота — темы добавятся автоматически\n\n"
-        "✅ Уже отслеживаю эту группу!"
-    )
+@router.message(F.chat.type.in_({"group", "supergroup"}))
+async def group_message_handler(message: Message):
+    """Handler for all group messages."""
+    await _process_group_message(message)
