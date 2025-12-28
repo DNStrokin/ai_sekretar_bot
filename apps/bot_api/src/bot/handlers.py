@@ -89,7 +89,8 @@ async def _process_group_message(message: Message):
         group = await db_service.get_or_create_group(session, user.id, chat_id, message.chat.title, is_forum=True)
 
         # Сценарий 1: Сообщение в General (Буфер) => Маршрутизация
-        if topic_id is None:
+        # Тема 1 - это General в некоторых клиентах/API версиях, либо None
+        if topic_id is None or topic_id == 1:
             # Получаем список активных тем
             topics = await db_service.get_group_topics(session, group.id)
             
