@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Личный секретарь — Настройки</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>⚙️ Настройки</h1>
+            <p class="subtitle" id="group-name">Загрузка...</p>
+        </header>
+
+        <!-- Tabs -->
+        <nav class="tabs">
+            <button class="tab active" data-tab="topics">📁 Темы</button>
+            <button class="tab" data-tab="ai">🤖 AI</button>
+        </nav>
+
+        <!-- Topics Tab -->
+        <section id="topics-tab" class="tab-content active">
+            <div class="section-header">
+                <h2>Темы группы</h2>
+                <button class="btn-icon" id="sync-topics" title="Синхронизировать">🔄</button>
+            </div>
+            
+            <div id="topics-list" class="topics-list">
+                <div class="loading">Загрузка тем...</div>
+            </div>
+        </section>
+
+        <!-- AI Settings Tab -->
+        <section id="ai-tab" class="tab-content">
+            <div class="section-header">
+                <h2>Настройки AI</h2>
+            </div>
+            
+            <div class="form-group">
+                <label for="ai-provider">Провайдер</label>
+                <select id="ai-provider">
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI (ChatGPT)</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="ai-model">Модель</label>
+                <select id="ai-model">
+                    <option value="gemini-pro">Gemini Pro</option>
+                    <option value="gemini-flash">Gemini Flash</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="brevity-level">Уровень краткости</label>
+                <input type="range" id="brevity-level" min="1" max="5" value="3">
+                <div class="range-labels">
+                    <span>Подробно</span>
+                    <span>Кратко</span>
+                </div>
+            </div>
+            
+            <button class="btn-primary" id="save-ai-settings">💾 Сохранить</button>
+        </section>
+
+        <!-- Topic Edit Modal -->
+        <div id="topic-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modal-title">Редактирование темы</h3>
+                    <button class="btn-close" id="close-modal">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="topic-description">Описание темы</label>
+                        <textarea id="topic-description" placeholder="Какую информацию сохранять в эту тему..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="topic-format">Правила форматирования</label>
+                        <textarea id="topic-format" placeholder="Как оформлять заметки в этой теме..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-secondary" id="cancel-edit">Отмена</button>
+                    <button class="btn-primary" id="save-topic">Сохранить</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast notifications -->
+        <div id="toast" class="toast hidden"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

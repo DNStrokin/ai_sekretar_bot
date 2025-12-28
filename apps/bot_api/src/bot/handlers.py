@@ -6,7 +6,10 @@ Telegram Bot Handlers
 
 import logging
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, ChatMemberUpdated
+from aiogram.types import (
+    Message, CallbackQuery, ChatMemberUpdated,
+    InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+)
 from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -207,10 +210,26 @@ async def cmd_help(message: Message):
 
 @router.message(Command("settings"))
 async def cmd_settings(message: Message):
-    """Обработка команды /settings."""
+    """Обработка команды /settings — открытие WebApp."""
+    # URL WebApp (GitHub Pages)
+    # TODO: Заменить на реальный URL после деплоя
+    webapp_url = "https://your-username.github.io/ai_sekretar_bot/"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⚙️ Открыть настройки",
+            web_app=WebAppInfo(url=webapp_url)
+        )]
+    ])
+    
     await message.answer(
-        "⚙️ Настройки доступны через WebApp.\n"
-        "Нажми на кнопку меню бота."
+        "⚙️ <b>Настройки бота</b>\n\n"
+        "Нажмите кнопку ниже, чтобы открыть панель настроек.\n"
+        "Там вы можете:\n"
+        "• Управлять темами группы\n"
+        "• Настроить AI-провайдера\n"
+        "• Изменить уровень краткости",
+        reply_markup=keyboard
     )
 
 
