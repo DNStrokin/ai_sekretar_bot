@@ -126,6 +126,7 @@ async function loadData() {
         } else {
             // Загружаем с сервера
             await Promise.all([
+                loadGroup(),
                 loadTopics(),
                 loadAISettings()
             ]);
@@ -137,6 +138,20 @@ async function loadData() {
     } catch (error) {
         console.error('Error loading data:', error);
         showToast('Ошибка загрузки данных');
+    }
+}
+
+async function loadGroup() {
+    try {
+        const response = await fetch(`${CONFIG.API_URL}/group`, {
+            headers: getAuthHeaders()
+        });
+        if (response.ok) {
+            const data = await response.json();
+            state.group = data;
+        }
+    } catch (error) {
+        console.error('Error loading group:', error);
     }
 }
 
