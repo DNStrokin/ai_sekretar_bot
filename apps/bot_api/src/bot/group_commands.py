@@ -277,6 +277,7 @@ async def _show_format_menu(message_or_obj, state: FSMContext, topic_id: int):
         topic = await db_service.get_or_create_topic(session, group.id, topic_id)
         
         current = topic.format_policy_text or DEFAULT_FORMAT
+        logger.info(f"Displaying format for topic {topic_id}: {repr(current)}")
         current_escaped = html.escape(current)
         
         await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=message.message_id)
@@ -284,7 +285,7 @@ async def _show_format_menu(message_or_obj, state: FSMContext, topic_id: int):
         
         text = (
             f"📋 <b>Формат заметок</b>\n\n"
-            f"Текущий шаблон:\n<pre>{current_escaped}</pre>\n\n"
+            f"Текущий шаблон:\n<pre><code class=\"language-html\">{current_escaped}</code></pre>\n\n"
             f"<b>Доступные переменные:</b>\n"
             f"• <code>[title]</code> - Заголовок (генерируется AI)\n"
             f"• <code>[caption]</code> - Краткая выжимка (генерируется AI)\n"
