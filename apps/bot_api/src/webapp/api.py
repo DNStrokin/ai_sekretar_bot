@@ -289,12 +289,31 @@ async def sync_topics(user: User = Depends(get_current_user)):
     """
     Синхронизировать темы из Telegram группы.
     
-    Для синхронизации используется Telegram Bot API getForumTopicIcon/getForumTopic.
-    В MVP: темы добавляются вручную или боту отправляют команду в группе.
+    Telegram Bot API не позволяет получить полный список тем.
+    Поэтому эта функция создаёт демо-темы для начала работы.
+    Реальные темы добавляются автоматически при взаимодействии.
     """
-    # TODO: Реализовать через Telegram Bot API
-    # В текущей версии темы добавляются при публикации заметки
-    return {"status": "ok", "message": "Синхронизация тем будет доступна в следующей версии"}
+    from src.services.topic_sync import create_default_topics
+    
+    session_maker = get_async_session_maker()
+    async with session_maker() as session:
+        # Получаем группу пользователя
+        result = await session.execute(
+            select(Group).where(Group.user_id == user.id)
+        )
+        group = result.scalar_one_or_none()
+        
+        if not group:
+            raise HTTPException(status_code=404, detail="Группа не найдена. Добавьте бота в группу.")
+        
+        # Создаём демо-темы
+        topics = await create_default_topics(session, group.id)
+        
+        return {
+            "status": "ok",
+            "message": f"Создано {len(topics)} демо-тем",
+            "synced_count": len(topics)
+        }
 
 
 # ============ AI Settings ============
