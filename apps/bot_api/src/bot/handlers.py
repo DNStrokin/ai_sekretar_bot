@@ -211,8 +211,9 @@ async def cmd_help(message: Message):
 @router.message(Command("settings"))
 async def cmd_settings(message: Message):
     """Обработка команды /settings — открытие WebApp."""
-    # URL WebApp (GitHub Pages)
-    webapp_url = "https://dnstrokin.github.io/ai_sekretar_bot/"
+    # URL WebApp (относительный путь на том же сервере)
+    # В production это будет https://your-app.timeweb.cloud/webapp
+    webapp_url = os.getenv("WEBAPP_URL", "https://your-app.timeweb.cloud/webapp")
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(

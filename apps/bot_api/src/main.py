@@ -69,16 +69,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS для WebApp (GitHub Pages)
+# CORS для WebApp (если нужен доступ с других доменов)
 from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://dnstrokin.github.io",
-        "http://localhost:3000",  # Для локальной разработки
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=["*"],  # Для MVP разрешаем все
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,6 +82,23 @@ app.add_middleware(
 
 # Include WebApp API routes
 app.include_router(webapp_router, prefix="/api/v1")
+
+# Статические файлы WebApp
+import os
+from fastapi.staticfiles import StaticFiles
+
+# Путь к static относительно src/main.py
+static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Редирект с /webapp на /static/webapp/index.html
+from fastapi.responses import RedirectResponse
+
+@app.get("/webapp")
+async def redirect_to_webapp():
+    """Редирект на WebApp."""
+    return RedirectResponse(url="/static/webapp/index.html")
 
 
 @app.get("/health")
@@ -97,3 +110,4 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
