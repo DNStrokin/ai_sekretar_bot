@@ -71,26 +71,28 @@ def is_group_forum(message: Message) -> bool:
     )
 
 
+async def delete_message_safe(message: Message):
+    """Безопасное удаление сообщения."""
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
 # ============ Cancel Handler ============
 
 @group_router.callback_query(F.data == "cancel_dialog")
 async def callback_cancel_dialog(callback: CallbackQuery, state: FSMContext):
     """Обработка отмены диалога — очищает state и удаляет сообщение."""
     await state.clear()
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass  # Сообщение уже удалено или нет прав
+    await delete_message_safe(callback.message)
     await callback.answer("Отменено")
 
 
 @group_router.callback_query(F.data == "close_message")
 async def callback_close_message(callback: CallbackQuery):
     """Удалить сообщение при нажатии Закрыть."""
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
+    await delete_message_safe(callback.message)
     await callback.answer()
 
 
@@ -102,9 +104,11 @@ async def process_init_description(message: Message, state: FSMContext):
     group_id = data.get("group_id")
     bot_message_id = data.get("bot_message_id")
     
+    # Сразу удаляем ответ пользователя
+    await delete_message_safe(message)
+    
     if not topic_id or not group_id:
         await state.clear()
-        await message.answer("❌ Ошибка. Попробуйте /info снова.")
         return
     
     description = message.text.strip()
@@ -121,13 +125,7 @@ async def process_init_description(message: Message, state: FSMContext):
     
     await state.clear()
     
-    # Удаляем сообщение пользователя
-    try:
-        await message.delete()
-    except Exception:
-        pass
-    
-    # Редактируем сообщение бота
+    # Редактируем сообщение бота, если есть ID
     if bot_message_id:
         try:
             await message.bot.edit_message_text(
@@ -140,7 +138,7 @@ async def process_init_description(message: Message, state: FSMContext):
         except Exception:
             pass
     
-    # Если редактирование не удалось — отправляем новое
+    # Если редактирование не удалось, отправляем новое (но это крайний случай)
     await message.answer(
         f"✅ <b>Тема настроена!</b>\n\n📝 {description}",
         reply_markup=get_topic_settings_keyboard(topic_id)
@@ -152,8 +150,9 @@ async def process_init_description(message: Message, state: FSMContext):
 @group_router.message(Command("rules"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_set_rules(message: Message, state: FSMContext):
     """Команда /rules — редактировать описание темы."""
+    await delete_message_safe(message)
+    
     if not is_group_forum(message):
-        await message.answer("❌ Выполните эту команду внутри темы форума.")
         return
     
     topic_id = message.message_thread_id
@@ -171,19 +170,23 @@ async def cmd_set_rules(message: Message, state: FSMContext):
         topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
-            await message.answer("❌ Сначала выполните /init")
+            # Темы нет, но так как мы удалили команду, надо как-то сообщить
+            # Используем временное сообщение которое удалится
+            msg = await message.answer("❌ Сначала выполните /info", reply_markup=get_cancel_keyboard())
+            # Можно не удалять, юзер нажмет отмена/закрыть
             return
         
         current = topic.description or "<i>не задано</i>"
         
-        await state.update_data(topic_id=topic_id, group_id=group.id)
-        await state.set_state(TopicRulesState.waiting_for_rules)
-        
-        await message.answer(
+        msg = await message.answer(
             f"📝 <b>Описание темы</b>\n\n"
             f"Текущее: {current}\n\n"
-            f"Введите новое описание:"
+            f"Введите новое описание:",
+            reply_markup=get_cancel_keyboard()
         )
+        
+        await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=msg.message_id)
+        await state.set_state(TopicRulesState.waiting_for_rules)
 
 
 @group_router.message(TopicRulesState.waiting_for_rules, F.chat.type.in_({"group", "supergroup"}))
@@ -191,14 +194,18 @@ async def process_rules_input(message: Message, state: FSMContext):
     """Обработка ввода нового описания."""
     data = await state.get_data()
     topic_id = data.get("topic_id")
+    bot_message_id = data.get("bot_message_id")
+    
+    # Удаляем сообщение пользователя
+    await delete_message_safe(message)
     
     if topic_id:
-        await _save_topic_rules(message, topic_id, message.text.strip())
+        await _save_topic_rules(message, topic_id, message.text.strip(), bot_message_id)
     
     await state.clear()
 
 
-async def _save_topic_rules(message: Message, topic_id: int, rules_text: str):
+async def _save_topic_rules(message: Message, topic_id: int, rules_text: str, bot_message_id: int = None):
     """Сохранить описание темы."""
     session_maker = get_async_session_maker()
     async with session_maker() as session:
@@ -207,7 +214,6 @@ async def _save_topic_rules(message: Message, topic_id: int, rules_text: str):
         topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
-            await message.answer("❌ Сначала выполните /init")
             return
         
         topic.description = rules_text
@@ -216,7 +222,20 @@ async def _save_topic_rules(message: Message, topic_id: int, rules_text: str):
         
         logger.info(f"[RULES] Тема {topic_id}: {rules_text[:50]}...")
         
-        await message.answer(f"✅ Описание обновлено:\n\n{rules_text}")
+        text = f"✅ Описание обновлено:\n\n{rules_text}"
+        
+        if bot_message_id:
+            try:
+                await message.bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=bot_message_id,
+                    text=text,
+                    reply_markup=get_topic_settings_keyboard(topic_id) # Возвращаем меню настроек или закрыть
+                )
+            except Exception:
+                await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
+        else:
+             await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
 
 
 # ============ /format Command ============
@@ -224,8 +243,9 @@ async def _save_topic_rules(message: Message, topic_id: int, rules_text: str):
 @group_router.message(Command("format"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_set_format(message: Message, state: FSMContext):
     """Команда /format — задать формат заметок."""
+    await delete_message_safe(message)
+    
     if not is_group_forum(message):
-        await message.answer("❌ Выполните эту команду внутри темы форума.")
         return
     
     topic_id = message.message_thread_id
@@ -242,23 +262,24 @@ async def cmd_set_format(message: Message, state: FSMContext):
         topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
-            await message.answer("❌ Сначала выполните /init")
-            return
+             msg = await message.answer("❌ Сначала выполните /init", reply_markup=get_cancel_keyboard())
+             return
         
         current = topic.format_policy_text or "<i>по умолчанию</i>"
         
-        await state.update_data(topic_id=topic_id, group_id=group.id)
-        await state.set_state(TopicFormatState.waiting_for_format)
-        
-        await message.answer(
+        msg = await message.answer(
             f"📋 <b>Формат заметок</b>\n\n"
             f"Текущий: {current}\n\n"
             f"Опишите, как оформлять заметки:\n"
             f"• <i>Заголовок и краткое описание</i>\n"
             f"• <i>Только ключевые слова</i>\n"
             f"• <i>Списком с датами</i>\n\n"
-            f"Введите формат:"
+            f"Введите формат:",
+            reply_markup=get_cancel_keyboard()
         )
+        
+        await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=msg.message_id)
+        await state.set_state(TopicFormatState.waiting_for_format)
 
 
 @group_router.message(TopicFormatState.waiting_for_format, F.chat.type.in_({"group", "supergroup"}))
@@ -266,14 +287,17 @@ async def process_format_input(message: Message, state: FSMContext):
     """Обработка ввода формата."""
     data = await state.get_data()
     topic_id = data.get("topic_id")
+    bot_message_id = data.get("bot_message_id")
+    
+    await delete_message_safe(message)
     
     if topic_id:
-        await _save_topic_format(message, topic_id, message.text.strip())
+        await _save_topic_format(message, topic_id, message.text.strip(), bot_message_id)
     
     await state.clear()
 
 
-async def _save_topic_format(message: Message, topic_id: int, format_text: str):
+async def _save_topic_format(message: Message, topic_id: int, format_text: str, bot_message_id: int = None):
     """Сохранить формат заметок."""
     session_maker = get_async_session_maker()
     async with session_maker() as session:
@@ -282,7 +306,6 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str):
         topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
-            await message.answer("❌ Сначала выполните /init")
             return
         
         topic.format_policy_text = format_text
@@ -290,7 +313,20 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str):
         
         logger.info(f"[FORMAT] Тема {topic_id}: {format_text[:50]}...")
         
-        await message.answer(f"✅ Формат заметок задан:\n\n{format_text}")
+        text = f"✅ Формат заметок задан:\n\n{format_text}"
+        
+        if bot_message_id:
+            try:
+                await message.bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=bot_message_id,
+                    text=text,
+                    reply_markup=get_topic_settings_keyboard(topic_id)
+                )
+            except Exception:
+                await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
+        else:
+             await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
 
 
 # ============ /info Command ============
@@ -299,11 +335,10 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str):
 async def cmd_topic_info(message: Message, state: FSMContext):
     """
     Команда /info — универсальная команда управления темой.
-    Если тема не настроена — запускает настройку.
-    Если настроена — показывает статус и кнопки управления.
     """
+    await delete_message_safe(message)
+    
     if not is_group_forum(message):
-        await message.answer("❌ Выполните эту команду внутри темы форума.")
         return
     
     topic_id = message.message_thread_id
@@ -374,13 +409,15 @@ async def callback_topic_rules(callback: CallbackQuery, state: FSMContext):
         
         current = topic.description or "не задано"
         
-        await state.update_data(topic_id=topic_id, group_id=group.id)
+        await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=callback.message.message_id)
         await state.set_state(TopicRulesState.waiting_for_rules)
         
-        await callback.message.answer(
+        # Редактируем сообщение (вместо отправки нового)
+        await callback.message.edit_text(
             f"📝 <b>Описание темы</b>\n\n"
             f"Текущее: {current}\n\n"
-            f"Введите новое описание:"
+            f"Введите новое описание:",
+            reply_markup=get_cancel_keyboard()
         )
         await callback.answer()
 
@@ -402,13 +439,15 @@ async def callback_topic_format(callback: CallbackQuery, state: FSMContext):
         
         current = topic.format_policy_text or "по умолчанию"
         
-        await state.update_data(topic_id=topic_id, group_id=group.id)
+        await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=callback.message.message_id)
         await state.set_state(TopicFormatState.waiting_for_format)
         
-        await callback.message.answer(
+        # Редактируем сообщение
+        await callback.message.edit_text(
             f"📋 <b>Формат заметок</b>\n\n"
             f"Текущий: {current}\n\n"
-            f"Опишите, как оформлять заметки:"
+            f"Опишите, как оформлять заметки:",
+             reply_markup=get_cancel_keyboard()
         )
         await callback.answer()
 
@@ -453,7 +492,7 @@ async def callback_bind_topic(callback: CallbackQuery, state: FSMContext):
         group = await db_service.get_or_create_group(session, user.id, callback.message.chat.id, callback.message.chat.title)
         
         # Сохраняем данные для FSM
-        await state.update_data(topic_id=topic_id, group_id=group.id)
+        await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=callback.message.message_id) # Важно сохранить ID
         await state.set_state(TopicInitState.waiting_for_description)
         
         await callback.message.edit_text(
@@ -462,6 +501,7 @@ async def callback_bind_topic(callback: CallbackQuery, state: FSMContext):
             "Например:\n"
             "• <i>Идеи для проектов</i>\n"
             "• <i>Книги для чтения</i>\n"
-            "• <i>Список покупок</i>"
+            "• <i>Список покупок</i>",
+            reply_markup=get_cancel_keyboard()
         )
         await callback.answer()

@@ -23,7 +23,8 @@ def get_cancel_keyboard() -> InlineKeyboardMarkup:
 def get_bind_topic_keyboard(topic_id: int) -> InlineKeyboardMarkup:
     """Клавиатура для привязки темы."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📌 Привязать тему", callback_data=f"bind_topic:{topic_id}")]
+        [InlineKeyboardButton(text="📌 Привязать тему", callback_data=f"bind_topic:{topic_id}")],
+        [InlineKeyboardButton(text="🙈 Скрыть", callback_data="close_message")]
     ])
 
 def get_settings_keyboard(webapp_url: str) -> InlineKeyboardMarkup:
