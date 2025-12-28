@@ -69,6 +69,21 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# CORS для WebApp (GitHub Pages)
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://dnstrokin.github.io",
+        "http://localhost:3000",  # Для локальной разработки
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Include WebApp API routes
 app.include_router(webapp_router, prefix="/api/v1")
 
