@@ -4,7 +4,7 @@ services:
   # ============ Bot API ============
   bot-api:
     build:
-      context: ./apps/bot_api
+      context: ../apps/bot_api
       dockerfile: Dockerfile
     container_name: sekretar-bot-api
     restart: unless-stopped
@@ -30,7 +30,7 @@ services:
   # ============ Celery Worker ============
   worker:
     build:
-      context: ./apps/worker
+      context: ../apps/worker
       dockerfile: Dockerfile
     container_name: sekretar-worker
     restart: unless-stopped
