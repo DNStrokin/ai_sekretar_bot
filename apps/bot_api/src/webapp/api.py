@@ -290,10 +290,8 @@ async def sync_topics(user: User = Depends(get_current_user)):
     Синхронизировать темы из Telegram группы.
     
     Темы добавляются автоматически когда бот видит сообщения в группе.
-    Эта функция создаёт демо-темы только если у пользователя ещё нет тем.
+    Нажмите кнопку синхронизации после отправки сообщений в темы.
     """
-    from src.services.topic_sync import create_default_topics
-    
     session_maker = get_async_session_maker()
     async with session_maker() as session:
         # Получаем группу пользователя
@@ -305,7 +303,7 @@ async def sync_topics(user: User = Depends(get_current_user)):
         if not group:
             raise HTTPException(status_code=404, detail="Группа не найдена. Добавьте бота в группу.")
         
-        # Проверяем есть ли уже темы
+        # Получаем темы
         topics_result = await session.execute(
             select(Topic).where(Topic.group_id == group.id)
         )
@@ -318,13 +316,11 @@ async def sync_topics(user: User = Depends(get_current_user)):
                 "synced_count": len(existing_topics)
             }
         
-        # Создаём демо-темы только если тем нет
-        topics = await create_default_topics(session, group.id)
-        
+        # Если тем нет — инструктируем пользователя
         return {
-            "status": "ok",
-            "message": f"Создано {len(topics)} демо-тем (отправьте сообщения в темы группы для реальной синхронизации)",
-            "synced_count": len(topics)
+            "status": "info",
+            "message": "Тем пока нет. Отправьте сообщение в любую тему вашей группы — бот автоматически добавит её.",
+            "synced_count": 0
         }
 
 

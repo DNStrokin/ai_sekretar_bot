@@ -84,6 +84,24 @@ async def get_user_group(session: AsyncSession, telegram_user_id: int) -> Group 
     return result.scalar_one_or_none()
 
 
+# ============ DEBUG: Логирование всех сообщений ============
+
+@router.message()
+async def debug_log_all_messages(message: Message):
+    """Отладочный обработчик — логирует ВСЕ входящие сообщения."""
+    chat_type = message.chat.type
+    chat_id = message.chat.id
+    thread_id = message.message_thread_id
+    user_id = message.from_user.id if message.from_user else None
+    text = (message.text or "")[:50]
+    
+    logger.info(f"[DEBUG] Сообщение: chat_type={chat_type}, chat_id={chat_id}, thread={thread_id}, user={user_id}, text='{text}'")
+    
+    # Если это группа — обрабатываем захват тем
+    if chat_type in ("group", "supergroup"):
+        await _process_group_message(message)
+
+
 @router.my_chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
 async def on_bot_added_to_chat(event: ChatMemberUpdated, bot: Bot):
     """
@@ -279,41 +297,18 @@ async def handle_callback(callback: CallbackQuery):
 
 # ============ Group Message Handler (для захвата тем) ============
 
-@router.message(F.chat.type.in_({"group", "supergroup"}))
-async def handle_group_message(message: Message):
+async def _process_group_message(message: Message):
     """
-    Обработчик сообщений в группе.
+    Внутренняя функция обработки сообщений в группе.
     Автоматически добавляет темы в БД при получении сообщений.
+    Также привязывает группу к пользователю если она ещё не привязана.
     """
-    logger.info(f"[GROUP] Получено сообщение в группе {message.chat.id}, thread={message.message_thread_id}")
-    
-    # Проверяем что это форум с темой
-    if not message.message_thread_id:
-        logger.info("[GROUP] Нет message_thread_id, пропускаем")
-        return
+    logger.info(f"[GROUP] Обрабатываем сообщение: chat_id={message.chat.id}, thread={message.message_thread_id}")
     
     chat = message.chat
     is_forum = getattr(chat, 'is_forum', False)
-    logger.info(f"[GROUP] is_forum={is_forum}")
     
-    if not is_forum:
-        return
-    
-    topic_id = message.message_thread_id
-    topic_name = None
-    
-    # Пробуем получить название темы (если сообщение содержит информацию о форуме)
-    if message.forum_topic_created:
-        topic_name = message.forum_topic_created.name
-    elif message.forum_topic_edited:
-        topic_name = message.forum_topic_edited.name
-    else:
-        # Для обычных сообщений название темы недоступно напрямую
-        topic_name = f"Тема #{topic_id}"
-    
-    logger.info(f"[GROUP] topic_id={topic_id}, topic_name={topic_name}")
-    
-    # Сохраняем тему в БД
+    # Сохраняем группу и тему в БД
     session_maker = get_async_session_maker()
     async with session_maker() as session:
         # Находим группу
@@ -322,11 +317,40 @@ async def handle_group_message(message: Message):
         )
         group = result.scalar_one_or_none()
         
+        # Если группы нет — создаём её и привязываем к отправителю
+        if not group and message.from_user:
+            logger.info(f"[GROUP] Группа {chat.id} не найдена, создаём и привязываем к пользователю {message.from_user.id}")
+            user = await get_or_create_user(session, message.from_user.id)
+            group = await save_group_to_db(
+                session,
+                user_id=user.id,
+                telegram_group_id=chat.id,
+                title=chat.title or "Без названия",
+                is_forum=is_forum
+            )
+            logger.info(f"[GROUP] Создана группа: {group.title} (id={group.id})")
+        
         if not group:
-            logger.warning(f"[GROUP] Группа {chat.id} не найдена в БД")
+            logger.warning(f"[GROUP] Не удалось создать группу {chat.id}")
             return
         
-        logger.info(f"[GROUP] Найдена группа: {group.title} (id={group.id})")
+        # Если это не форум или нет thread_id — просто выходим
+        if not is_forum or not message.message_thread_id:
+            logger.info(f"[GROUP] is_forum={is_forum}, thread_id={message.message_thread_id}, пропускаем добавление темы")
+            return
+        
+        topic_id = message.message_thread_id
+        topic_name = None
+        
+        # Пробуем получить название темы
+        if message.forum_topic_created:
+            topic_name = message.forum_topic_created.name
+        elif message.forum_topic_edited:
+            topic_name = message.forum_topic_edited.name
+        else:
+            topic_name = f"Тема #{topic_id}"
+        
+        logger.info(f"[GROUP] topic_id={topic_id}, topic_name={topic_name}")
         
         # Проверяем существует ли тема
         topic_result = await session.execute(
@@ -347,7 +371,18 @@ async def handle_group_message(message: Message):
             )
             session.add(topic)
             await session.commit()
-            logger.info(f"Добавлена тема из группы: {topic_name} (id={topic_id})")
+            logger.info(f"[GROUP] Добавлена тема: {topic_name} (id={topic_id})")
+            
+            # Предлагаем настроить тему с инлайн кнопкой
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📌 Привязать тему", callback_data=f"bind_topic:{topic_id}")]
+            ])
+            await message.answer(
+                "👋 Вижу новую тему!\n\n"
+                "Хотите настроить её для бота?",
+                reply_markup=keyboard
+            )
 
 
 @router.message(Command("sync"))

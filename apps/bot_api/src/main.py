@@ -15,6 +15,7 @@ from aiogram.enums import ParseMode
 
 from src.settings.config import settings
 from src.bot.handlers import router as bot_router
+from src.bot.group_commands import group_router, setup_bot_commands
 from src.webapp.api import router as webapp_router
 from src.db.database import init_db, get_async_session_maker
 
@@ -32,7 +33,8 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher()
-dp.include_router(bot_router)
+dp.include_router(group_router)  # Групповые команды (первый приоритет)
+dp.include_router(bot_router)     # Остальные обработчики
 
 
 @asynccontextmanager
@@ -45,6 +47,9 @@ async def lifespan(app: FastAPI):
     # Запуск polling в фоне (для разработки)
     # В production используется webhook
     if settings.USE_POLLING:
+        # Настраиваем меню команд
+        await setup_bot_commands(bot)
+        
         polling_task = asyncio.create_task(dp.start_polling(bot))
         logger.info("Бот запущен в режиме polling")
     

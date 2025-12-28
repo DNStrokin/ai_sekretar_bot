@@ -5,7 +5,23 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/).
 Проект следует [Семантическому версионированию](https://semver.org/lang/ru/).
 
-## [Unreleased]
+## [0.2.0] - 2025-12-28
+
+### Добавлено
+
+- **Команды управления темами в группе**
+  - `/info` — универсальная команда (настройка новой темы или показ статуса существующей)
+  - Автоматическое предложение настроить тему при первом сообщении
+  - Инлайн кнопки для редактирования описания и формата заметок
+  - Формат заметок по умолчанию
+- **Меню команд бота** через `setMyCommands` (разное для ЛС и групп)
+- **Docker Compose для локальной разработки** (`docker-compose.dev.yml`)
+- Файл `group_commands.py` — обработчики групповых команд
+
+### Изменено
+
+- Объединены команды `/init` и `/info` в одну умную команду `/info`
+- Удалены ReplyKeyboard кнопки (не работают в desktop Telegram)
 
 ## [0.1.0] - 2025-12-28
 
@@ -35,5 +51,5 @@
   - Описание стека (tech_stack.md)
   - Дизайн взаимодействия с LLM (llm_interaction_design.md)
 
-[Unreleased]: https://github.com/username/ai_sekretar_bot/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/username/ai_sekretar_bot/releases/tag/v0.1.0
+[0.2.0]: https://github.com/DNStrokin/ai_sekretar_bot/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/DNStrokin/ai_sekretar_bot/releases/tag/v0.1.0
