@@ -4,6 +4,7 @@ Telegram Bot Handlers
 Обрабатывает входящие сообщения от пользователя.
 """
 
+import os
 import logging
 from aiogram import Router, F, Bot
 from aiogram.types import (
