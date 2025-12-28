@@ -212,8 +212,7 @@ async def cmd_help(message: Message):
 async def cmd_settings(message: Message):
     """Обработка команды /settings — открытие WebApp."""
     # URL WebApp (GitHub Pages)
-    # TODO: Заменить на реальный URL после деплоя
-    webapp_url = "https://your-username.github.io/ai_sekretar_bot/"
+    webapp_url = "https://dnstrokin.github.io/ai_sekretar_bot/"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
