@@ -99,6 +99,20 @@ async def create_topic(
     await session.commit()
     return topic
 
+
+async def get_or_create_topic(
+    session: AsyncSession, 
+    group_id: int, 
+    telegram_topic_id: int, 
+    title: str = "Тема"
+) -> Topic:
+    """Получить или создать тему."""
+    topic = await get_topic(session, group_id, telegram_topic_id)
+    if not topic:
+        topic = await create_topic(session, group_id, telegram_topic_id, title)
+        logger.info(f"[DB] Создана тема {telegram_topic_id} в группе {group_id}")
+    return topic
+
 async def get_group_topics(session: AsyncSession, group_id: int) -> list[Topic]:
     """Получить все активные темы группы."""
     result = await session.execute(
