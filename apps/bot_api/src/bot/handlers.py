@@ -10,11 +10,13 @@ from src.services import db_service
 from src.bot.keyboards import get_settings_keyboard, get_bind_topic_keyboard
 from src.settings.config import settings
 from src.ai.openai_provider import OpenAIProvider, TopicContext
+from src.ai.gemini_provider import GeminiProvider
 
 logger = logging.getLogger(__name__)
 
 router = Router()
-ai_provider = OpenAIProvider()
+# ai_provider = OpenAIProvider()
+ai_provider = GeminiProvider()
 
 
 # ============ Private Chat Handlers ============
@@ -96,6 +98,7 @@ async def _process_group_message(message: Message):
             
             if not topics:
                 # Нет тем для сортировки — ничего не делаем или просим создать
+                logger.info("No active topics found for sorting. Ignoring message in General.")
                 return
 
             # Подготавливаем контекст для AI
@@ -139,6 +142,8 @@ async def _process_group_message(message: Message):
                 f"{' '.join(rendered_note.tags)}\n"
                 f"👤 <a href='tg://user?id={user_id}'>{message.from_user.first_name}</a>"
             )
+            
+            logger.info(f"Target topic ID determined: {target_topic_id}")
             
             # Отправляем в целевую тему
             try:
