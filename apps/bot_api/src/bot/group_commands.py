@@ -12,16 +12,20 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.types import (
     Message, CallbackQuery, BotCommand, 
-    BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats,
-    InlineKeyboardButton, InlineKeyboardMarkup
+    BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats
 )
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from sqlalchemy import select
 
 from src.db.database import get_async_session_maker
-from src.db.models import User, Group, Topic
+from src.db.models import Topic
+from src.services import db_service
+from src.bot.states import TopicInitState, TopicRulesState, TopicFormatState
+from src.bot.keyboards import (
+    get_topic_settings_keyboard, 
+    get_cancel_keyboard, 
+    get_bind_topic_keyboard
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,23 +34,6 @@ group_router = Router()
 
 # Формат заметок по умолчанию
 DEFAULT_FORMAT = "Заголовок, краткое описание, дата"
-
-
-# ============ FSM States ============
-
-class TopicInitState(StatesGroup):
-    """Состояния для инициализации темы."""
-    waiting_for_description = State()
-
-
-class TopicRulesState(StatesGroup):
-    """Состояния для редактирования описания."""
-    waiting_for_rules = State()
-
-
-class TopicFormatState(StatesGroup):
-    """Состояния для формата заметок."""
-    waiting_for_format = State()
 
 
 # ============ Bot Commands Menu ============
@@ -75,55 +62,6 @@ async def setup_bot_commands(bot: Bot):
 
 # ============ Helper Functions ============
 
-async def get_or_create_user(session, telegram_user_id: int) -> User:
-    """Получить или создать пользователя."""
-    result = await session.execute(
-        select(User).where(User.telegram_user_id == telegram_user_id)
-    )
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        user = User(telegram_user_id=telegram_user_id)
-        session.add(user)
-        await session.commit()
-        await session.refresh(user)
-    
-    return user
-
-
-async def get_or_create_group(session, user_id: int, chat) -> Group:
-    """Получить или создать группу."""
-    result = await session.execute(
-        select(Group).where(Group.telegram_group_id == chat.id)
-    )
-    group = result.scalar_one_or_none()
-    
-    if not group:
-        is_forum = getattr(chat, 'is_forum', False)
-        group = Group(
-            telegram_group_id=chat.id,
-            title=chat.title or "Без названия",
-            topics_enabled=is_forum,
-            user_id=user_id
-        )
-        session.add(group)
-        await session.commit()
-        await session.refresh(group)
-    
-    return group
-
-
-async def get_topic(session, group_id: int, topic_id: int) -> Topic | None:
-    """Получить тему по ID."""
-    result = await session.execute(
-        select(Topic).where(
-            Topic.group_id == group_id,
-            Topic.telegram_topic_id == topic_id
-        )
-    )
-    return result.scalar_one_or_none()
-
-
 def is_group_forum(message: Message) -> bool:
     """Проверить что сообщение из форума группы."""
     return (
@@ -133,17 +71,27 @@ def is_group_forum(message: Message) -> bool:
     )
 
 
-def get_topic_settings_keyboard(topic_id: int) -> InlineKeyboardMarkup:
-    """Создать инлайн клавиатуру для настроек темы."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📝 Описание", callback_data=f"topic_rules:{topic_id}"),
-            InlineKeyboardButton(text="📋 Формат", callback_data=f"topic_format:{topic_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="🔄 Обновить", callback_data=f"topic_info:{topic_id}"),
-        ]
-    ])
+# ============ Cancel Handler ============
+
+@group_router.callback_query(F.data == "cancel_dialog")
+async def callback_cancel_dialog(callback: CallbackQuery, state: FSMContext):
+    """Обработка отмены диалога — очищает state и удаляет сообщение."""
+    await state.clear()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass  # Сообщение уже удалено или нет прав
+    await callback.answer("Отменено")
+
+
+@group_router.callback_query(F.data == "close_message")
+async def callback_close_message(callback: CallbackQuery):
+    """Удалить сообщение при нажатии Закрыть."""
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
 
 
 @group_router.message(TopicInitState.waiting_for_description, F.chat.type.in_({"group", "supergroup"}))
@@ -152,6 +100,7 @@ async def process_init_description(message: Message, state: FSMContext):
     data = await state.get_data()
     topic_id = data.get("topic_id")
     group_id = data.get("group_id")
+    bot_message_id = data.get("bot_message_id")
     
     if not topic_id or not group_id:
         await state.clear()
@@ -162,28 +111,38 @@ async def process_init_description(message: Message, state: FSMContext):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        result = await session.execute(
-            select(Topic).where(
-                Topic.group_id == group_id,
-                Topic.telegram_topic_id == topic_id
-            )
-        )
-        topic = result.scalar_one_or_none()
+        topic = await db_service.get_topic(session, group_id, topic_id)
         
         if topic:
             topic.description = description
-            # Используем первые слова описания как название
             topic.title = description[:50] + ("..." if len(description) > 50 else "")
             await session.commit()
-            
             logger.info(f"[INIT] Тема {topic_id} настроена: {description[:50]}...")
     
     await state.clear()
     
+    # Удаляем сообщение пользователя
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    
+    # Редактируем сообщение бота
+    if bot_message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=bot_message_id,
+                text=f"✅ <b>Тема настроена!</b>\n\n📝 {description}",
+                reply_markup=get_topic_settings_keyboard(topic_id)
+            )
+            return
+        except Exception:
+            pass
+    
+    # Если редактирование не удалось — отправляем новое
     await message.answer(
-        f"✅ <b>Тема настроена!</b>\n\n"
-        f"📝 {description}\n\n"
-        f"Теперь бот будет понимать, какие заметки сохранять сюда.",
+        f"✅ <b>Тема настроена!</b>\n\n📝 {description}",
         reply_markup=get_topic_settings_keyboard(topic_id)
     )
 
@@ -207,9 +166,9 @@ async def cmd_set_rules(message: Message, state: FSMContext):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        group = await get_or_create_group(session, user.id, message.chat)
-        topic = await get_topic(session, group.id, topic_id)
+        user = await db_service.get_or_create_user(session, message.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, message.chat.id, message.chat.title)
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
             await message.answer("❌ Сначала выполните /init")
@@ -243,9 +202,9 @@ async def _save_topic_rules(message: Message, topic_id: int, rules_text: str):
     """Сохранить описание темы."""
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        group = await get_or_create_group(session, user.id, message.chat)
-        topic = await get_topic(session, group.id, topic_id)
+        user = await db_service.get_or_create_user(session, message.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, message.chat.id, message.chat.title)
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
             await message.answer("❌ Сначала выполните /init")
@@ -278,9 +237,9 @@ async def cmd_set_format(message: Message, state: FSMContext):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        group = await get_or_create_group(session, user.id, message.chat)
-        topic = await get_topic(session, group.id, topic_id)
+        user = await db_service.get_or_create_user(session, message.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, message.chat.id, message.chat.title)
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
             await message.answer("❌ Сначала выполните /init")
@@ -318,9 +277,9 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str):
     """Сохранить формат заметок."""
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        group = await get_or_create_group(session, user.id, message.chat)
-        topic = await get_topic(session, group.id, topic_id)
+        user = await db_service.get_or_create_user(session, message.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, message.chat.id, message.chat.title)
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
             await message.answer("❌ Сначала выполните /init")
@@ -352,37 +311,34 @@ async def cmd_topic_info(message: Message, state: FSMContext):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, message.from_user.id)
-        group = await get_or_create_group(session, user.id, chat)
-        topic = await get_topic(session, group.id, topic_id)
+        user = await db_service.get_or_create_user(session, message.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, chat.id, chat.title)
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         # Если темы нет или она не настроена — запускаем настройку
         if not topic or not topic.description:
             # Создаём тему если её нет
             if not topic:
-                topic = Topic(
-                    telegram_topic_id=topic_id,
-                    title="Тема",
-                    group_id=group.id,
-                    is_active=True
-                )
-                session.add(topic)
-                await session.commit()
+                topic = await db_service.create_topic(session, group.id, topic_id)
                 logger.info(f"[INFO] Создана тема {topic_id}")
             
             # Запускаем настройку
-            await state.update_data(topic_id=topic_id, group_id=group.id)
-            await state.set_state(TopicInitState.waiting_for_description)
-            
-            await message.answer(
+            bot_msg = await message.answer(
                 "📁 <b>Настройка темы</b>\n\n"
                 "Опишите, какую информацию нужно сохранять в эту тему.\n\n"
                 "Например:\n"
                 "• <i>Идеи для проектов</i>\n"
                 "• <i>Книги для чтения</i>\n"
-                "• <i>Список покупок</i>\n\n"
-                "Введите описание:"
+                "• <i>Список покупок</i>",
+                reply_markup=get_cancel_keyboard()
             )
+            
+            await state.update_data(
+                topic_id=topic_id, 
+                group_id=group.id,
+                bot_message_id=bot_msg.message_id
+            )
+            await state.set_state(TopicInitState.waiting_for_description)
             return
         
         # Тема настроена — показываем статус
@@ -408,9 +364,9 @@ async def callback_topic_rules(callback: CallbackQuery, state: FSMContext):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, callback.from_user.id)
-        group = await get_or_create_group(session, user.id, callback.message.chat)
-        topic = await get_topic(session, group.id, topic_id)
+        user = await db_service.get_or_create_user(session, callback.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, callback.message.chat.id, callback.message.chat.title)
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
             await callback.answer("❌ Тема не найдена", show_alert=True)
@@ -436,9 +392,9 @@ async def callback_topic_format(callback: CallbackQuery, state: FSMContext):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, callback.from_user.id)
-        group = await get_or_create_group(session, user.id, callback.message.chat)
-        topic = await get_topic(session, group.id, topic_id)
+        user = await db_service.get_or_create_user(session, callback.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, callback.message.chat.id, callback.message.chat.title)
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
             await callback.answer("❌ Тема не найдена", show_alert=True)
@@ -464,9 +420,9 @@ async def callback_topic_info(callback: CallbackQuery):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, callback.from_user.id)
-        group = await get_or_create_group(session, user.id, callback.message.chat)
-        topic = await get_topic(session, group.id, topic_id)
+        user = await db_service.get_or_create_user(session, callback.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, callback.message.chat.id, callback.message.chat.title)
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
             await callback.answer("❌ Тема не найдена", show_alert=True)
@@ -493,8 +449,8 @@ async def callback_bind_topic(callback: CallbackQuery, state: FSMContext):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        user = await get_or_create_user(session, callback.from_user.id)
-        group = await get_or_create_group(session, user.id, callback.message.chat)
+        user = await db_service.get_or_create_user(session, callback.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, callback.message.chat.id, callback.message.chat.title)
         
         # Сохраняем данные для FSM
         await state.update_data(topic_id=topic_id, group_id=group.id)

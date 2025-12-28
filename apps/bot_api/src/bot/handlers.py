@@ -9,79 +9,17 @@ import logging
 from aiogram import Router, F, Bot
 from aiogram.types import (
     Message, CallbackQuery, ChatMemberUpdated,
-    InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    InlineKeyboardButton, InlineKeyboardMarkup
 )
 from aiogram.filters import Command, ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.database import get_async_session_maker
-from src.db.models import User, Group, Topic
+from src.services import db_service
+from src.bot.keyboards import get_settings_keyboard, get_bind_topic_keyboard
 
 logger = logging.getLogger(__name__)
 
 router = Router()
-
-
-async def get_or_create_user(session: AsyncSession, telegram_user_id: int) -> User:
-    """Получить или создать пользователя в БД."""
-    result = await session.execute(
-        select(User).where(User.telegram_user_id == telegram_user_id)
-    )
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        user = User(telegram_user_id=telegram_user_id)
-        session.add(user)
-        await session.commit()
-        await session.refresh(user)
-        logger.info(f"Создан новый пользователь: {telegram_user_id}")
-    
-    return user
-
-
-async def save_group_to_db(
-    session: AsyncSession, 
-    user_id: int, 
-    telegram_group_id: int, 
-    title: str,
-    is_forum: bool = False
-) -> Group:
-    """Сохранить группу в БД."""
-    # Проверяем, есть ли уже группа для этого пользователя
-    result = await session.execute(
-        select(Group).where(Group.user_id == user_id)
-    )
-    group = result.scalar_one_or_none()
-    
-    if group:
-        # Обновляем существующую группу
-        group.telegram_group_id = telegram_group_id
-        group.title = title
-        group.topics_enabled = is_forum
-    else:
-        # Создаём новую группу
-        group = Group(
-            telegram_group_id=telegram_group_id,
-            title=title,
-            topics_enabled=is_forum,
-            user_id=user_id
-        )
-        session.add(group)
-    
-    await session.commit()
-    await session.refresh(group)
-    return group
-
-
-async def get_user_group(session: AsyncSession, telegram_user_id: int) -> Group | None:
-    """Получить группу пользователя из БД."""
-    result = await session.execute(
-        select(Group)
-        .join(User)
-        .where(User.telegram_user_id == telegram_user_id)
-    )
-    return result.scalar_one_or_none()
 
 
 # ============ DEBUG: Логирование всех сообщений ============
@@ -124,10 +62,10 @@ async def on_bot_added_to_chat(event: ChatMemberUpdated, bot: Bot):
         session_maker = get_async_session_maker()
         async with session_maker() as session:
             # Получаем или создаём пользователя
-            user = await get_or_create_user(session, owner_id)
+            user = await db_service.get_or_create_user(session, owner_id)
             
             # Сохраняем группу
-            group = await save_group_to_db(
+            group = await db_service.get_or_create_group(
                 session, 
                 user.id, 
                 chat.id, 
@@ -167,7 +105,7 @@ async def cmd_group_id(message: Message):
         # Получаем группу из БД
         session_maker = get_async_session_maker()
         async with session_maker() as session:
-            group = await get_user_group(session, message.from_user.id)
+            group = await db_service.get_user_group(session, message.from_user.id)
             
             if group:
                 await message.answer(
@@ -197,7 +135,7 @@ async def cmd_start(message: Message):
     # Создаём пользователя в БД при первом старте
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        await get_or_create_user(session, message.from_user.id)
+        await db_service.get_or_create_user(session, message.from_user.id)
     
     await message.answer(
         "👋 Привет! Я твой личный AI-секретарь.\n\n"
@@ -234,13 +172,6 @@ async def cmd_settings(message: Message):
     # В production это будет https://your-app.timeweb.cloud/webapp
     webapp_url = os.getenv("WEBAPP_URL", "https://your-app.timeweb.cloud/webapp")
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="⚙️ Открыть настройки",
-            web_app=WebAppInfo(url=webapp_url)
-        )]
-    ])
-    
     await message.answer(
         "⚙️ <b>Настройки бота</b>\n\n"
         "Нажмите кнопку ниже, чтобы открыть панель настроек.\n"
@@ -248,7 +179,7 @@ async def cmd_settings(message: Message):
         "• Управлять темами группы\n"
         "• Настроить AI-провайдера\n"
         "• Изменить уровень краткости",
-        reply_markup=keyboard
+        reply_markup=get_settings_keyboard(webapp_url)
     )
 
 
@@ -311,27 +242,30 @@ async def _process_group_message(message: Message):
     # Сохраняем группу и тему в БД
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-        # Находим группу
-        result = await session.execute(
-            select(Group).where(Group.telegram_group_id == chat.id)
-        )
-        group = result.scalar_one_or_none()
+        # Получаем/создаем группу
+        # Важно: если user_id есть, это хорошо, но в группе может писать кто угодно
+        # Поэтому сначала пробуем найти группу по ID
+        # Если message.from_user есть — используем его
         
-        # Если группы нет — создаём её и привязываем к отправителю
-        if not group and message.from_user:
-            logger.info(f"[GROUP] Группа {chat.id} не найдена, создаём и привязываем к пользователю {message.from_user.id}")
-            user = await get_or_create_user(session, message.from_user.id)
-            group = await save_group_to_db(
-                session,
-                user_id=user.id,
-                telegram_group_id=chat.id,
-                title=chat.title or "Без названия",
-                is_forum=is_forum
-            )
-            logger.info(f"[GROUP] Создана группа: {group.title} (id={group.id})")
+        user_id = message.from_user.id if message.from_user else 0
+        if user_id:
+             await db_service.get_or_create_user(session, user_id)
+
+        # Здесь логика немного сложнее: мы не всегда хотим создавать группу, если её нет, 
+        # только если мы знаем owner'а (например админа). 
+        # Но в оригинале мы создавали группу, если её нет, и привязывали к текущему юзеру.
+        # Оставим пока как было:
+        
+        group = await db_service.get_or_create_group(
+             session, 
+             user_id=user_id, 
+             chat_id=chat.id, 
+             title=chat.title or "Без названия", 
+             is_forum=is_forum
+        )
         
         if not group:
-            logger.warning(f"[GROUP] Не удалось создать группу {chat.id}")
+            logger.warning(f"[GROUP] Не удалось создать или найти группу {chat.id}")
             return
         
         # Если это не форум или нет thread_id — просто выходим
@@ -353,35 +287,18 @@ async def _process_group_message(message: Message):
         logger.info(f"[GROUP] topic_id={topic_id}, topic_name={topic_name}")
         
         # Проверяем существует ли тема
-        topic_result = await session.execute(
-            select(Topic).where(
-                Topic.group_id == group.id,
-                Topic.telegram_topic_id == topic_id
-            )
-        )
-        topic = topic_result.scalar_one_or_none()
+        topic = await db_service.get_topic(session, group.id, topic_id)
         
         if not topic:
             # Создаём новую тему
-            topic = Topic(
-                telegram_topic_id=topic_id,
-                title=topic_name,
-                group_id=group.id,
-                is_active=True
-            )
-            session.add(topic)
-            await session.commit()
+            await db_service.create_topic(session, group.id, topic_id, topic_name)
             logger.info(f"[GROUP] Добавлена тема: {topic_name} (id={topic_id})")
             
             # Предлагаем настроить тему с инлайн кнопкой
-            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📌 Привязать тему", callback_data=f"bind_topic:{topic_id}")]
-            ])
             await message.answer(
                 "👋 Вижу новую тему!\n\n"
                 "Хотите настроить её для бота?",
-                reply_markup=keyboard
+                reply_markup=get_bind_topic_keyboard(topic_id)
             )
 
 
