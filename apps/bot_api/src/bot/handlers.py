@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.database import get_async_session_maker
-from src.db.models import User, Group
+from src.db.models import User, Group, Topic
 
 logger = logging.getLogger(__name__)
 
@@ -275,3 +275,97 @@ async def handle_file(message: Message):
 async def handle_callback(callback: CallbackQuery):
     """Обработка callback-кнопок."""
     await callback.answer("Обработка...")
+
+
+# ============ Group Message Handler (для захвата тем) ============
+
+@router.message(F.chat.type.in_({"group", "supergroup"}))
+async def handle_group_message(message: Message):
+    """
+    Обработчик сообщений в группе.
+    Автоматически добавляет темы в БД при получении сообщений.
+    """
+    # Проверяем что это форум с темой
+    if not message.message_thread_id:
+        return
+    
+    chat = message.chat
+    is_forum = getattr(chat, 'is_forum', False)
+    if not is_forum:
+        return
+    
+    topic_id = message.message_thread_id
+    topic_name = None
+    
+    # Пробуем получить название темы (если сообщение содержит информацию о форуме)
+    if message.forum_topic_created:
+        topic_name = message.forum_topic_created.name
+    elif message.forum_topic_edited:
+        topic_name = message.forum_topic_edited.name
+    else:
+        # Для обычных сообщений название темы недоступно напрямую
+        topic_name = f"Тема #{topic_id}"
+    
+    # Сохраняем тему в БД
+    session_maker = get_async_session_maker()
+    async with session_maker() as session:
+        # Находим группу
+        result = await session.execute(
+            select(Group).where(Group.telegram_group_id == chat.id)
+        )
+        group = result.scalar_one_or_none()
+        
+        if not group:
+            return
+        
+        # Проверяем существует ли тема
+        topic_result = await session.execute(
+            select(Topic).where(
+                Topic.group_id == group.id,
+                Topic.telegram_topic_id == topic_id
+            )
+        )
+        topic = topic_result.scalar_one_or_none()
+        
+        if not topic:
+            # Создаём новую тему
+            topic = Topic(
+                telegram_topic_id=topic_id,
+                title=topic_name,
+                group_id=group.id,
+                is_active=True
+            )
+            session.add(topic)
+            await session.commit()
+            logger.info(f"Добавлена тема из группы: {topic_name} (id={topic_id})")
+
+
+@router.message(Command("sync"))
+async def cmd_sync_topics(message: Message, bot: Bot):
+    """Команда /sync — синхронизация тем группы."""
+    chat = message.chat
+    
+    if chat.type == "private":
+        await message.answer(
+            "❌ Эту команду нужно выполнить в группе с темами.\n"
+            "Добавьте бота в группу и напишите /sync там."
+        )
+        return
+    
+    is_forum = getattr(chat, 'is_forum', False)
+    if not is_forum:
+        await message.answer(
+            "❌ Эта группа не является форумом.\n"
+            "Включите темы в настройках группы."
+        )
+        return
+    
+    # Получаем список тем через сообщения
+    await message.answer(
+        "🔄 <b>Синхронизация тем</b>\n\n"
+        "Бот автоматически добавляет темы, когда видит сообщения в них.\n\n"
+        "Чтобы синхронизировать все темы:\n"
+        "1. Отправьте любое сообщение в каждой теме\n"
+        "2. Или просто используйте бота — темы добавятся автоматически\n\n"
+        "✅ Уже отслеживаю эту группу!"
+    )

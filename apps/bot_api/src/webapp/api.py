@@ -289,9 +289,8 @@ async def sync_topics(user: User = Depends(get_current_user)):
     """
     Синхронизировать темы из Telegram группы.
     
-    Telegram Bot API не позволяет получить полный список тем.
-    Поэтому эта функция создаёт демо-темы для начала работы.
-    Реальные темы добавляются автоматически при взаимодействии.
+    Темы добавляются автоматически когда бот видит сообщения в группе.
+    Эта функция создаёт демо-темы только если у пользователя ещё нет тем.
     """
     from src.services.topic_sync import create_default_topics
     
@@ -306,12 +305,25 @@ async def sync_topics(user: User = Depends(get_current_user)):
         if not group:
             raise HTTPException(status_code=404, detail="Группа не найдена. Добавьте бота в группу.")
         
-        # Создаём демо-темы
+        # Проверяем есть ли уже темы
+        topics_result = await session.execute(
+            select(Topic).where(Topic.group_id == group.id)
+        )
+        existing_topics = topics_result.scalars().all()
+        
+        if existing_topics:
+            return {
+                "status": "ok",
+                "message": f"Найдено {len(existing_topics)} тем",
+                "synced_count": len(existing_topics)
+            }
+        
+        # Создаём демо-темы только если тем нет
         topics = await create_default_topics(session, group.id)
         
         return {
             "status": "ok",
-            "message": f"Создано {len(topics)} демо-тем",
+            "message": f"Создано {len(topics)} демо-тем (отправьте сообщения в темы группы для реальной синхронизации)",
             "synced_count": len(topics)
         }
 
