@@ -34,12 +34,7 @@ logger = logging.getLogger(__name__)
 group_router = Router()
 
 # Формат заметок по умолчанию
-# Формат заметок по умолчанию (HTML supported)
-DEFAULT_FORMAT = (
-    "<b>[title]</b>\n\n"
-    "[caption]\n\n"
-    "[tags]"
-)
+from src.bot.constants import DEFAULT_FORMAT
 
 
 # ============ Bot Commands Menu ============
@@ -489,17 +484,23 @@ async def callback_bind_topic(callback: CallbackQuery, state: FSMContext):
     
     session_maker = get_async_session_maker()
     async with session_maker() as session:
-            try:
-                await message.bot.edit_message_text(
-                    chat_id=message.chat.id,
-                    message_id=bot_message_id,
-                    text=text,
-                    reply_markup=get_topic_settings_keyboard(topic_id)
-                )
-            except Exception:
-                await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
-        else:
-             await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
+        user = await db_service.get_or_create_user(session, callback.from_user.id)
+        group = await db_service.get_or_create_group(session, user.id, callback.message.chat.id, callback.message.chat.title)
+        
+        # Сохраняем данные для FSM
+        await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=callback.message.message_id)
+        await state.set_state(TopicInitState.waiting_for_description)
+        
+        await callback.message.edit_text(
+            "📁 <b>Настройка темы</b>\n\n"
+            "Опишите, какую информацию нужно сохранять в эту тему.\n\n"
+            "Например:\n"
+            "• <i>Идеи для проектов</i>\n"
+            "• <i>Книги для чтения</i>\n"
+            "• <i>Список покупок</i>",
+            reply_markup=get_cancel_keyboard()
+        )
+        await callback.answer()
 
 
 

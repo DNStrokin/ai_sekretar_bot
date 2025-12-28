@@ -15,7 +15,7 @@ from src.bot.keyboards import get_settings_keyboard, get_bind_topic_keyboard, ge
 from src.settings.config import settings
 from src.ai.openai_provider import OpenAIProvider, TopicContext
 from src.ai.gemini_provider import GeminiProvider
-from src.bot.group_commands import DEFAULT_FORMAT
+from src.bot.constants import DEFAULT_FORMAT
 
 logger = logging.getLogger(__name__)
 
