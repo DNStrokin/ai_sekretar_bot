@@ -97,11 +97,12 @@ class OpenAIProvider(AIProvider):
         prompt = (
             "You are a professional editor. Format the user's raw text into a clean note.\n"
             f"Context (Topic): {topic.title}\n"
-            f"Formatting Rules: {format_rules}\n\n"
+            f"Formatting Rules: {format_rules}\n"
+            "IMPORTANT: ALWAYS use Russian language for the title, content, and tags.\n"
             "Task:\n"
-            "1. Create a short, descriptive emoji title.\n"
-            "2. Clean up and format the content (fix grammar, use lists if appropriate).\n"
-            "3. Extract key tags (hashtags).\n\n"
+            "1. Create a short, descriptive emoji title in Russian.\n"
+            "2. Clean up and format the content (fix grammar, use lists if appropriate) in Russian.\n"
+            "3. Extract key tags (hashtags) in Russian.\n\n"
             "Return JSON only: {\"title\": \"...\", \"content\": \"...\", \"tags\": [\"#tag1\", ...]}"
         )
 

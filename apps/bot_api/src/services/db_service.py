@@ -108,3 +108,34 @@ async def get_group_topics(session: AsyncSession, group_id: int) -> list[Topic]:
         )
     )
     return list(result.scalars().all())
+
+
+async def create_confirmation(
+    session: AsyncSession,
+    user_id: int,
+    source_message_id: int,
+    prepared_content: str,
+    suggested_topics: str
+) -> int:
+    """Создать запись ожидания подтверждения. Возвращает ID."""
+    from src.db.models import PendingConfirmation
+    from datetime import datetime, timedelta
+    
+    confirmation = PendingConfirmation(
+        user_id=user_id,
+        source_message_id=source_message_id,
+        prepared_content=prepared_content,
+        suggested_topics=suggested_topics,
+        expires_at=datetime.utcnow() + timedelta(minutes=10)
+    )
+    session.add(confirmation)
+    await session.commit()
+    return confirmation.id
+
+async def get_confirmation(session: AsyncSession, confirmation_id: int) -> Optional["PendingConfirmation"]:
+    """Получить запись подтверждения."""
+    from src.db.models import PendingConfirmation
+    result = await session.execute(
+        select(PendingConfirmation).where(PendingConfirmation.id == confirmation_id)
+    )
+    return result.scalar_one_or_none()

@@ -62,7 +62,7 @@ ai_sekretar_bot/
 │   │   ├── src/
 │   │   │   ├── bot/          # Telegram bot handlers
 │   │   │   ├── webapp/       # WebApp API
-│   │   │   ├── ai/           # AI провайдеры
+│   │   │   ├── ai/           # AI провайдеры (OpenAI, Gemini)
 │   │   │   ├── stt/          # Speech-to-Text
 │   │   │   ├── db/           # База данных
 │   │   │   └── settings/     # Конфигурация

@@ -42,3 +42,30 @@ def get_settings_keyboard(webapp_url: str) -> InlineKeyboardMarkup:
             web_app=WebAppInfo(url=webapp_url)
         )]
     ])
+
+
+def get_ambiguity_keyboard(confirmation_id: int, topics: list[dict]) -> InlineKeyboardMarkup:
+    """
+    Клавиатура для выбора темы при неоднозначности.
+    topics: list of dict {'id': int, 'title': str}
+    """
+    keyboard = []
+    
+    # Кнопки для каждой темы
+    for t in topics:
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"📂 {t['title']}", 
+                callback_data=f"confirm_topic:{confirmation_id}:{t['id']}"
+            )
+        ])
+        
+    # Кнопка "Все предложенные"
+    keyboard.append([
+        InlineKeyboardButton(
+            text="✅ Все предложенные", 
+            callback_data=f"confirm_topic:{confirmation_id}:all"
+        )
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)

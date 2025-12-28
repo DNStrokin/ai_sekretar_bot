@@ -7,7 +7,10 @@ from aiogram.fsm.context import FSMContext
 from src.db.database import get_async_session_maker
 from src.db.models import Group, Topic
 from src.services import db_service
-from src.bot.keyboards import get_settings_keyboard, get_bind_topic_keyboard
+import asyncio
+import json
+from sqlalchemy import select
+from src.bot.keyboards import get_settings_keyboard, get_bind_topic_keyboard, get_close_keyboard, get_ambiguity_keyboard
 from src.settings.config import settings
 from src.ai.openai_provider import OpenAIProvider, TopicContext
 from src.ai.gemini_provider import GeminiProvider
@@ -79,6 +82,14 @@ async def _process_group_message(message: Message):
 
     if not text:
         return
+        
+    # Helper for auto-deletion
+    async def delete_later(msg: Message, delay: int = 30):
+        await asyncio.sleep(delay)
+        try:
+            await msg.delete()
+        except Exception:
+            pass
 
     # Игнорируем команды (они обрабатываются в group_commands.py)
     if text.startswith("/"):
@@ -89,12 +100,71 @@ async def _process_group_message(message: Message):
         # Получаем/создаем пользователя и группу
         user = await db_service.get_or_create_user(session, user_id)
         group = await db_service.get_or_create_group(session, user.id, chat_id, message.chat.title, is_forum=True)
+        
+        # Получаем список активных тем (нужен везде)
+        topics = await db_service.get_group_topics(session, group.id)
+
+        # Helper для отправки (Refactored)
+        async def _process_and_send_note(note_text: str, target_t_id: int):
+            target_topic = next((t for t in topics if t.telegram_topic_id == target_t_id), None)
+            if not target_topic:
+                 logger.error(f"Topic {target_t_id} not found in active topics")
+                 return
+
+            try:
+                rendered_note = await ai_provider.render_note(
+                    note_text, 
+                    TopicContext(
+                        topic_id=target_topic.telegram_topic_id,
+                        title=target_topic.title,
+                        description=target_topic.description,
+                        format_policy_text=target_topic.format_policy_text
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Rendering failed: {e}")
+                err_msg = await message.answer(
+                    f"⚠️ <b>Ошибка AI (форматирование):</b>\n{str(e)}",
+                    reply_markup=get_close_keyboard()
+                )
+                asyncio.create_task(delete_later(err_msg))
+                return
+
+            # Формируем сообщение
+            note_content = (
+                f"{rendered_note.title}\n\n"
+                f"{rendered_note.content}\n\n"
+                f"{' '.join(rendered_note.tags)}"
+            )
+
+            # Отправляем в целевую тему
+            try:
+                await message.bot.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=target_t_id,
+                    text=note_content,
+                    parse_mode="HTML"
+                )
+                logger.info(f"Сообщение перемещено в тему {target_t_id}")
+                
+                status_msg = await message.answer(
+                    f"🚀 Заметка отправлена в тему <b>{target_topic.title}</b>",
+                    reply_markup=get_close_keyboard()
+                )
+                asyncio.create_task(delete_later(status_msg))
+                
+            except Exception as e:
+                logger.error(f"Ошибка при перемещении заметки: {e}")
+                err_msg = await message.answer(
+                    f"⚠️ <b>Ошибка отправки:</b>\n{str(e)}",
+                    reply_markup=get_close_keyboard()
+                )
+                asyncio.create_task(delete_later(err_msg))
+
 
         # Сценарий 1: Сообщение в General (Буфер) => Маршрутизация
         # Тема 1 - это General в некоторых клиентах/API версиях, либо None
         if topic_id is None or topic_id == 1:
-            # Получаем список активных тем
-            topics = await db_service.get_group_topics(session, group.id)
             
             if not topics:
                 # Нет тем для сортировки — ничего не делаем или просим создать
@@ -115,72 +185,84 @@ async def _process_group_message(message: Message):
                 classification = await ai_provider.classify_note(text, ai_topics)
             except Exception as e:
                 logger.error(f"Classification failed: {e}")
-                await message.answer(f"⚠️ <b>Ошибка AI (классификация):</b>\n{str(e)}")
+                err_msg = await message.answer(
+                    f"⚠️ <b>Ошибка AI (классификация):</b>\n{str(e)}",
+                    reply_markup=get_close_keyboard()
+                )
+                asyncio.create_task(delete_later(err_msg))
                 return
 
             target_topic_id = classification.suggested_topic_id
             
-            logger.info(f"Target topic ID: {target_topic_id}")
+            # AMBIGUITY CHECK
+            # Проверяем, есть ли другие темы с высокой уверенностью
+            sorted_topics = sorted(classification.top_topics, key=lambda x: x['confidence'], reverse=True)
+            valid_candidates = [t for t in sorted_topics if t['topic_id'] != 0 and t['confidence'] > 0.4]
             
-            if target_topic_id == 0:
-                await message.answer(
-                    f"⚠️ <b>Не удалось определить тему</b>\n\n"
-                    f"AI не нашел подходящей темы для: <i>{text[:50]}...</i>\n"
-                    f"Активные темы: {', '.join([t.title for t in topics])}"
-                )
-                return
+            is_ambiguous = False
+            if len(valid_candidates) > 1:
+                # Если разница между первым и вторым небольшая (например < 0.2), или просто > 1 кандидата с высокой уверенностью?
+                # Давайте будем считать неоднозначным, если есть 2+ кандидата с уверенностью > 0.4
+                is_ambiguous = True
 
-            # Нашли тему! Форматируем заметку
-            target_topic = next((t for t in topics if t.telegram_topic_id == target_topic_id), None)
+            logger.info(f"Target: {target_topic_id}, Ambiguous: {is_ambiguous}, Candidates: {valid_candidates}")
             
-            await message.answer(f"✅ Тема определена: <b>{target_topic.title}</b>. Форматирую...")
-            
-            try:
-                rendered_note = await ai_provider.render_note(
-                    text, 
-                    TopicContext(
-                        topic_id=target_topic.telegram_topic_id,
-                        title=target_topic.title,
-                        description=target_topic.description,
-                        format_policy_text=target_topic.format_policy_text
-                    )
-                )
-            except Exception as e:
-                logger.error(f"Rendering failed: {e}")
-                await message.answer(f"⚠️ <b>Ошибка AI (форматирование):</b>\n{str(e)}")
-                return
-            
-            # Формируем сообщение
-            note_content = (
-                f"{rendered_note.title}\n\n"
-                f"{rendered_note.content}\n\n"
-                f"{' '.join(rendered_note.tags)}\n"
-                f"👤 <a href='tg://user?id={user_id}'>{message.from_user.first_name}</a>"
-            )
-            
-            logger.info(f"Target topic ID determined: {target_topic_id}")
-            
-            # Отправляем в целевую тему
-            try:
-                await message.bot.send_message(
-                    chat_id=chat_id,
-                    message_thread_id=target_topic_id,
-                    text=note_content,
-                    parse_mode="HTML"
-                )
-                logger.info(f"Сообщение перемещено из General в тему {target_topic_id}")
+            if is_ambiguous:
+                # Сохраняем "Ожидание подтверждения" в БД
+                candidate_ids = [c['topic_id'] for c in valid_candidates]
+                candidate_topics_info = [
+                    {'id': t.telegram_topic_id, 'title': t.title} 
+                    for t in topics 
+                    if t.telegram_topic_id in candidate_ids
+                ]
                 
-                await message.answer(f"🚀 Заметка отправлена в тему <b>{target_topic.title}</b>")
+                prepared_content = json.dumps({
+                    "text": text
+                })
                 
-                # Удаляем из General
+                suggested_topics_json = json.dumps(candidate_topics_info)
+                
+                conf_id = await db_service.create_confirmation(
+                    session,
+                    user_id=user.id,
+                    source_message_id=message.message_id,
+                    prepared_content=prepared_content,
+                    suggested_topics=suggested_topics_json
+                )
+                
+                # Отправляем сообщение с кнопками
+                kb = get_ambiguity_keyboard(conf_id, candidate_topics_info)
+                msg = await message.answer(
+                    "🤔 Не уверен, куда сохранить эту заметку.\nВыберите подходящую тему:",
+                    reply_markup=kb
+                )
+                
+                # Удаляем исходное сообщение (чистый буфер)
                 try:
                     await message.delete()
                 except Exception:
                     pass
-                    
-            except Exception as e:
-                logger.error(f"Ошибка при перемещении заметки: {e}")
-                await message.answer(f"⚠️ <b>Ошибка отправки:</b>\n{str(e)}")
+                return
+
+
+            if target_topic_id == 0:
+                err_msg = await message.answer(
+                    f"⚠️ <b>Не удалось определить тему</b>\n\n"
+                    f"AI не нашел подходящей темы для: <i>{text[:50]}...</i>\n"
+                    f"Активные темы: {', '.join([t.title for t in topics])}",
+                    reply_markup=get_close_keyboard()
+                )
+                asyncio.create_task(delete_later(err_msg))
+                return
+
+            # Нашли (одну) тему! 
+            await _process_and_send_note(text, target_topic_id)
+            
+            # Удаляем из General (мы это делали в конце, теперь тут)
+            try:
+                await message.delete()
+            except Exception:
+                pass
             
             return
 
@@ -205,6 +287,119 @@ async def _process_group_message(message: Message):
         # Если тема есть и активна — тут можно было бы тоже форматировать,
         # но пока оставим как есть (просто логирование или сохранение)
         logger.info(f"Сообщение в теме {topic_id}: {text[:20]}...")
+
+
+@router.callback_query(F.data.startswith("confirm_topic:"))
+async def cb_confirm_topic(callback: CallbackQuery):
+    """Обработка выбора темы при неоднозначности."""
+    # Data: "confirm_topic:{conf_id}:{topic_id}" (topic_id мб "all")
+    parts = callback.data.split(":")
+    conf_id = int(parts[1])
+    choisen_id_str = parts[2]
+    
+    chat_id = callback.message.chat.id
+    
+    session_maker = get_async_session_maker()
+    async with session_maker() as session:
+        confirmation = await db_service.get_confirmation(session, conf_id)
+        if not confirmation:
+            await callback.answer("⏳ Время ожидания истекло", show_alert=True)
+            await callback.message.delete()
+            return
+            
+        data = json.loads(confirmation.prepared_content)
+        note_text = data.get("text", "")
+        
+        candidates_data = json.loads(confirmation.suggested_topics)
+        
+        # Нужно получить активные темы группы снова, чтобы передать контекст
+        # Группу можно найти через user.groups по chat_id или просто запросить topics если есть group_id
+        # Но у нас нет group_id прямо здесь. Найдем через user_id и chat_id
+        user = await db_service.get_or_create_user(session, callback.from_user.id)
+        group = await db_service.get_user_group(session, user.telegram_user_id) 
+        # get_user_group возвращает первую попавшуюся группу юзера? Нет, там join. 
+        # Логика get_user_group была странной (User.telegram_user_id == ...), возвращает одну группу.
+        # А юзер может быть в нескольких.
+        # Лучше найти группу по chat_id
+        result = await session.execute(
+            select(Group).where(Group.telegram_group_id == chat_id)
+        )
+        group = result.scalar_one_or_none()
+        
+        if not group:
+            await callback.answer("❌ Группа не найдена")
+            return
+            
+        topics = await db_service.get_group_topics(session, group.id)
+
+        # Helper again (copy-paste logic or extract to module level? Module level is hard with closure vars)
+        # Let's duplicate logic for now or define simple render/send loop
+        
+        target_ids = []
+        if choisen_id_str == "all":
+            # Выбираем ВСЕ темы из candidates
+            target_ids = [c['id'] for c in candidates_data]
+        else:
+            target_ids = [int(choisen_id_str)]
+            
+        await callback.answer(f"Обрабатываю... ({len(target_ids)})")
+        
+        # Delete question message immediately
+        try:
+           await callback.message.delete()
+        except:
+           pass
+
+        # Helper for auto-deletion
+        async def delete_later(msg: Message, delay: int = 30):
+            await asyncio.sleep(delay)
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
+        for target_t_id in target_ids:
+            target_topic = next((t for t in topics if t.telegram_topic_id == target_t_id), None)
+            if not target_topic:
+                 continue
+                 
+            try:
+                rendered_note = await ai_provider.render_note(
+                    note_text, 
+                    TopicContext(
+                        topic_id=target_topic.telegram_topic_id,
+                        title=target_topic.title,
+                        description=target_topic.description,
+                        format_policy_text=target_topic.format_policy_text
+                    )
+                )
+                
+                note_content = (
+                    f"{rendered_note.title}\n\n"
+                    f"{rendered_note.content}\n\n"
+                    f"{' '.join(rendered_note.tags)}"
+                )
+                
+                await callback.message.bot.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=target_t_id,
+                    text=note_content,
+                    parse_mode="HTML"
+                )
+                
+                status_msg = await callback.message.answer(
+                    f"🚀 Заметка отправлена в тему <b>{target_topic.title}</b>",
+                    reply_markup=get_close_keyboard()
+                )
+                asyncio.create_task(delete_later(status_msg))
+                
+            except Exception as e:
+                logger.error(f"Error processing note for topic {target_t_id}: {e}")
+                err_msg = await callback.message.answer(
+                    f"⚠️ Ошибка для темы {target_topic.title}:\n{e}",
+                    reply_markup=get_close_keyboard()
+                )
+                asyncio.create_task(delete_later(err_msg))
 
 
 @router.message(F.chat.type.in_({"group", "supergroup"}))

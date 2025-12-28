@@ -26,9 +26,13 @@ class GeminiProvider(AIProvider):
             self.model = None
         else:
             genai.configure(api_key=self.api_key)
-            # Используем gemini-pro (или gemini-1.5-flash, если доступна, но начнем с pro)
-            # Для структурированного вывода лучше использовать модель поновее, если есть
-            self.model = genai.GenerativeModel('gemini-1.5-flash') 
+            genai.configure(api_key=self.api_key)
+            # Используем gemini-2.5-flash-lite (так как 1.5 не доступна для этого ключа/среды)
+            try:
+                self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
+            except Exception:
+                # Fallback
+                self.model = genai.GenerativeModel('gemini-flash-latest') 
 
     async def classify_note(
         self,
@@ -51,12 +55,12 @@ class GeminiProvider(AIProvider):
         prompt = (
             "You are a smart assistant that sorts notes into topics.\n"
             f"Allowed topics: {topics_str}\n\n"
-            "Task: Analyze the user's note and select the most appropriate topic ID.\n"
-            "If none of the topics fit perfectly, but one is close, choose it.\n"
-            "If the note is completely unrelated to any existing topic, set id=0 (new topic).\n\n"
-            "Return JSON only: {\"id\": <topic_id>, \"confidence\": <0.0-1.0>}"
+            "Task: Analyze the user's note. Identify ALL topics that might be relevant.\n"
+            "Assign a confidence score (0.0 to 1.0) to each relevant topic.\n"
+            "If the note is completely unrelated to any existing topic, include {\"id\": 0, \"confidence\": 1.0}.\n\n"
+            "Return JSON only: {\"candidates\": [{\"id\": <topic_id>, \"confidence\": <score>}, ...]}"
         )
-
+        
         # try:
         # Gemini требует явного указания MIME типа для JSON режима в некоторых версиях,
         # но простой промпт "Return JSON only" обычно работает.
@@ -71,16 +75,30 @@ class GeminiProvider(AIProvider):
         content = response.text
         data = json.loads(content)
         
-        topic_id = data.get("id", 0)
+        candidates = data.get("candidates", [])
+        if not candidates:
+             # Fallback logic if structure differs or empty
+             old_id = data.get("id", 0)
+             candidates = [{"id": old_id, "confidence": data.get("confidence", 1.0)}]
+
+        # Sort by confidence desc
+        candidates.sort(key=lambda x: x.get("confidence", 0), reverse=True)
         
-        # Валидация
-        if topic_id != 0 and not any(t.topic_id == topic_id for t in topics):
-            topic_id = 0
+        # Filter invalid topics
+        valid_candidates = [
+            c for c in candidates 
+            if c["id"] == 0 or any(t.topic_id == c["id"] for t in topics)
+        ]
+        
+        if not valid_candidates:
+            valid_candidates = [{"id": 0, "confidence": 1.0}]
+            
+        best = valid_candidates[0]
         
         return ClassificationResult(
-            suggested_topic_id=topic_id,
-            top_topics=[{"topic_id": topic_id, "confidence": data.get("confidence", 0.0)}],
-            need_new_topic=(topic_id == 0)
+            suggested_topic_id=best["id"],
+            top_topics=[{"topic_id": c["id"], "confidence": c.get("confidence", 0.0)} for c in valid_candidates],
+            need_new_topic=(best["id"] == 0)
         )
 
         # except Exception as e:
@@ -101,11 +119,12 @@ class GeminiProvider(AIProvider):
         prompt = (
             "You are a professional editor. Format the user's raw text into a clean note.\n"
             f"Context (Topic): {topic.title}\n"
-            f"Formatting Rules: {format_rules}\n\n"
+            f"Formatting Rules: {format_rules}\n"
+            "IMPORTANT: ALWAYS use Russian language for the title, content, and tags.\n"
             "Task:\n"
-            "1. Create a short, descriptive emoji title.\n"
-            "2. Clean up and format the content (fix grammar, use lists if appropriate).\n"
-            "3. Extract key tags (hashtags).\n\n"
+            "1. Create a short, descriptive emoji title in Russian.\n"
+            "2. Clean up and format the content (fix grammar, use lists if appropriate) in Russian.\n"
+            "3. Extract key tags (hashtags) in Russian.\n\n"
             "Return JSON only: {\"title\": \"...\", \"content\": \"...\", \"tags\": [\"#tag1\", ...]}"
         )
 
