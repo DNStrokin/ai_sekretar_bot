@@ -285,12 +285,17 @@ async def handle_group_message(message: Message):
     Обработчик сообщений в группе.
     Автоматически добавляет темы в БД при получении сообщений.
     """
+    logger.info(f"[GROUP] Получено сообщение в группе {message.chat.id}, thread={message.message_thread_id}")
+    
     # Проверяем что это форум с темой
     if not message.message_thread_id:
+        logger.info("[GROUP] Нет message_thread_id, пропускаем")
         return
     
     chat = message.chat
     is_forum = getattr(chat, 'is_forum', False)
+    logger.info(f"[GROUP] is_forum={is_forum}")
+    
     if not is_forum:
         return
     
@@ -306,6 +311,8 @@ async def handle_group_message(message: Message):
         # Для обычных сообщений название темы недоступно напрямую
         topic_name = f"Тема #{topic_id}"
     
+    logger.info(f"[GROUP] topic_id={topic_id}, topic_name={topic_name}")
+    
     # Сохраняем тему в БД
     session_maker = get_async_session_maker()
     async with session_maker() as session:
@@ -316,7 +323,10 @@ async def handle_group_message(message: Message):
         group = result.scalar_one_or_none()
         
         if not group:
+            logger.warning(f"[GROUP] Группа {chat.id} не найдена в БД")
             return
+        
+        logger.info(f"[GROUP] Найдена группа: {group.title} (id={group.id})")
         
         # Проверяем существует ли тема
         topic_result = await session.execute(
