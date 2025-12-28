@@ -13,7 +13,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from settings.config import settings
+from src.settings.config import settings
 from bot.handlers import router as bot_router
 from webapp.api import router as webapp_router
 from db.database import init_db

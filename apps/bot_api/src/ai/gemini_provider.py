@@ -8,7 +8,7 @@ import json
 from typing import Optional
 
 from .base import AIProvider, ClassificationResult, RenderedNote, TopicContext
-from settings.config import settings
+from src.settings.config import settings
 
 
 class GeminiProvider(AIProvider):

@@ -53,6 +53,8 @@ services:
     image: postgres:16-alpine
     container_name: sekretar-postgres
     restart: unless-stopped
+    ports:
+      - "5433:5432" # Порт 5433 снаружи (5432 занят локально)
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
