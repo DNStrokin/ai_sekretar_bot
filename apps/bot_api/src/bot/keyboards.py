@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, ReplyKeyboardMarkup, KeyboardButton
 
 def get_topic_settings_keyboard(topic_id: int) -> InlineKeyboardMarkup:
     """Создать инлайн клавиатуру для настроек темы."""
@@ -69,3 +69,21 @@ def get_ambiguity_keyboard(confirmation_id: int, topics: list[dict]) -> InlineKe
     ])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_topic_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Главная клавиатура для управления темой (Reply)."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⚙️ Настройки темы")]
+        ],
+        resize_keyboard=True,
+        persistent=True
+    )
+
+
+def get_back_keyboard(topic_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура с кнопкой Назад (к настройкам темы)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"topic_info:{topic_id}")]
+    ])

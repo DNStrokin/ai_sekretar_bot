@@ -113,7 +113,49 @@ async def _process_group_message(message: Message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     topic_id = message.message_thread_id
+    # Получаем текст из сообщения или подписи
     text = message.text or message.caption
+    
+    # Обработка голосовых сообщений
+    if not text and message.voice:
+        # Helper for processing message
+        processing_msg = await message.answer("🎤 Распознаю голосовое...")
+        
+        try:
+            # Скачиваем файл
+            bot = message.bot
+            file_id = message.voice.file_id
+            file = await bot.get_file(file_id)
+            file_path = file.file_path
+            
+            # Download to bytes
+            audio_bytes_io = await bot.download_file(file_path)
+            audio_bytes = audio_bytes_io.read()
+            
+            # Transcribe
+            text = await ai_provider.transcribe_voice(audio_bytes)
+            
+            # Удаляем сообщение о прогрессе
+            try:
+                await processing_msg.delete()
+            except:
+                pass
+                
+            if not text:
+                await message.answer("⚠️ Не удалось распознать речь.")
+                return
+                
+            # Добавляем пометку, что это голосовое
+            # (Опционально, можно добавить в сам текст или метаданные)
+            # text = f"[Голосовое] {text}"
+            
+        except Exception as e:
+            logger.error(f"Voice processing error: {e}")
+            try:
+                await processing_msg.edit_text("⚠️ Ошибка обработки голосового.")
+            except:
+                pass
+            return
 
     if not text:
         return

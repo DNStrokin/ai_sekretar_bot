@@ -27,7 +27,9 @@ from src.bot.keyboards import (
     get_topic_settings_keyboard, 
     get_cancel_keyboard, 
     get_bind_topic_keyboard,
-    get_close_keyboard
+    get_close_keyboard,
+    get_topic_reply_keyboard,
+    get_back_keyboard
 )
 from src.bot.constants import DEFAULT_FORMAT
 
@@ -155,6 +157,9 @@ async def process_init_description(message: Message, state: FSMContext):
             except Exception:
                 pass
     
+    # Отправляем подтверждение с Reply клавиатурой (чтобы кнопка появилась)
+    await message.answer("✅ Тема успешно настроена", reply_markup=get_topic_reply_keyboard())
+
     # Отправляем новое сообщение (будет удалено через 10 сек)
     confirm_msg = await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
     asyncio.create_task(delete_later(confirm_msg))
@@ -194,7 +199,7 @@ async def cmd_set_rules(message: Message, state: FSMContext):
             f"📝 <b>Описание темы</b>\n\n"
             f"Текущее: {current}\n\n"
             f"Введите новое описание:",
-            reply_markup=get_cancel_keyboard()
+            reply_markup=get_back_keyboard(topic_id)
         )
         
         await state.update_data(topic_id=topic_id, group_id=group.id, bot_message_id=msg.message_id)
@@ -255,13 +260,14 @@ async def _save_topic_rules(message: Message, topic_id: int, rules_text: str, bo
                     text=text,
                     reply_markup=get_topic_settings_keyboard(topic_id)
                 )
+                # Подтверждение с Reply клавиатурой
+                await message.answer("✅ Сохранено", reply_markup=get_topic_reply_keyboard())
                 return
             except Exception:
-                # Если не удалось отредактировать — удаляем старое
-                try:
-                    await message.bot.delete_message(message.chat.id, bot_message_id)
-                except Exception:
-                    pass
+                pass
+        
+        # Отправляем подтверждение с Reply клавиатурой
+        await message.answer("✅ Сохранено", reply_markup=get_topic_reply_keyboard())
         
         # Отправляем новое сообщение (будет удалено через 10 сек)
         confirm_msg = await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
@@ -354,10 +360,10 @@ async def _show_format_menu(message_or_obj, state: FSMContext, topic_id: int):
         )
 
         if is_callback:
-            await message.edit_text(text, reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+            await message.edit_text(text, reply_markup=get_back_keyboard(topic_id), parse_mode="HTML")
             await message_or_obj.answer()
         else:
-            msg = await message.answer(text, reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+            msg = await message.answer(text, reply_markup=get_back_keyboard(topic_id), parse_mode="HTML")
             await state.update_data(bot_message_id=msg.message_id)
 
 
@@ -422,20 +428,27 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str, 
                     text=text,
                     reply_markup=get_topic_settings_keyboard(topic_id)
                 )
+                # Подтверждение с Reply клавиатурой
+                await message.answer("✅ Сохранено", reply_markup=get_topic_reply_keyboard())
                 return
             except Exception:
-                # Если не удалось отредактировать — удаляем старое и создаём новое
-                try:
-                    await message.bot.delete_message(message.chat.id, bot_message_id)
-                except Exception:
-                    pass
+                pass
         
+        # Отправляем подтверждение с Reply клавиатурой
+        await message.answer("✅ Сохранено", reply_markup=get_topic_reply_keyboard())
+
         # Отправляем новое сообщение (будет удалено через 10 сек)
         confirm_msg = await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
         asyncio.create_task(delete_later(confirm_msg))
 
 
 # ============ /info Command ============
+
+@group_router.message(F.text == "⚙️ Настройки темы", F.chat.type.in_({"group", "supergroup"}))
+async def cmd_topic_settings_text(message: Message, state: FSMContext):
+    """Обработка кнопки ⚙️ Настройки темы."""
+    await cmd_topic_info(message, state)
+
 
 @group_router.message(Command("info"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_topic_info(message: Message, state: FSMContext):
@@ -478,7 +491,7 @@ async def cmd_topic_info(message: Message, state: FSMContext):
                 "• <i>Идеи для проектов</i>\n"
                 "• <i>Книги для чтения</i>\n"
                 "• <i>Список покупок</i>",
-                reply_markup=get_cancel_keyboard()
+                reply_markup=get_back_keyboard(topic_id)
             )
             
             await state.update_data(
@@ -498,6 +511,14 @@ async def cmd_topic_info(message: Message, state: FSMContext):
             format_display = f"<pre>{html.escape(format_text)}</pre>"
         else:
             format_display = f"<i>по умолчанию</i>\n<pre>{html.escape(DEFAULT_FORMAT)}</pre>"
+        
+        # Отправляем сообщение для Reply клавиатуры и сразу удаляем его
+        # Клавиатура должна остаться (persistent=True)
+        kb_msg = await message.answer("⚙️", reply_markup=get_topic_reply_keyboard())
+        try:
+            await kb_msg.delete() 
+        except:
+             pass
         
         # Отправляем настройки с Inline кнопками для редактирования
         await message.answer(
@@ -535,7 +556,7 @@ async def callback_topic_rules(callback: CallbackQuery, state: FSMContext):
             f"📝 <b>Описание темы</b>\n\n"
             f"Текущее: {current}\n\n"
             f"Введите новое описание:",
-            reply_markup=get_cancel_keyboard()
+            reply_markup=get_back_keyboard(topic_id)
         )
         await callback.answer()
 
@@ -548,8 +569,12 @@ async def callback_topic_format(callback: CallbackQuery, state: FSMContext):
 
 
 @group_router.callback_query(F.data.startswith("topic_info:"))
-async def callback_topic_info(callback: CallbackQuery):
+async def callback_topic_info(callback: CallbackQuery, state: FSMContext):
     """Обработка нажатия кнопки 'Обновить' — показывает актуальные настройки."""
+    
+    # Очищаем состояние, так как мы вернулись в меню
+    await state.clear()
+    
     topic_id = int(callback.data.split(":")[1])
     
     session_maker = get_async_session_maker()

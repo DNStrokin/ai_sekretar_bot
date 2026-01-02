@@ -158,5 +158,23 @@ class GeminiProvider(AIProvider):
 
     async def transcribe_voice(self, audio_data: bytes) -> str:
         """Transcribe using Gemini (multimodal)."""
-        # TODO: Implement Gemini audio transcription
-        return ""
+        if not self.model:
+            return ""
+            
+        prompt = "Transcribe this audio message exactly as spoken. Return only the text."
+        
+        try:
+            # Передаем аудио как blob
+            response = await self.model.generate_content_async(
+                [
+                    prompt,
+                    {
+                        "mime_type": "audio/ogg",
+                        "data": audio_data
+                    }
+                ]
+            )
+            return response.text.strip()
+        except Exception as e:
+            logger.error(f"Error transcribing voice: {e}")
+            return ""
