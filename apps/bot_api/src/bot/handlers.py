@@ -12,6 +12,8 @@ import asyncio
 import json
 from sqlalchemy import select
 from src.bot.keyboards import get_settings_keyboard, get_bind_topic_keyboard, get_close_keyboard, get_ambiguity_keyboard
+
+
 from src.settings.config import settings
 from src.ai.openai_provider import OpenAIProvider, TopicContext
 from src.ai.gemini_provider import GeminiProvider
@@ -156,6 +158,7 @@ async def _process_group_message(message: Message):
                 )
             except Exception as e:
                 logger.error(f"Rendering failed: {e}")
+
                 err_msg = await message.answer(
                     f"⚠️ <b>Ошибка AI (форматирование):</b>\n{str(e)}",
                     reply_markup=get_close_keyboard()
@@ -235,6 +238,7 @@ async def _process_group_message(message: Message):
                 classification = await ai_provider.classify_note(text, ai_topics)
             except Exception as e:
                 logger.error(f"Classification failed: {e}")
+
                 err_msg = await message.answer(
                     f"⚠️ <b>Ошибка AI (классификация):</b>\n{str(e)}",
                     reply_markup=get_close_keyboard()
@@ -289,6 +293,7 @@ async def _process_group_message(message: Message):
                 
                 # Отправляем сообщение с кнопками
                 kb = get_ambiguity_keyboard(conf_id, candidate_topics_info)
+
                 msg = await message.answer(
                     "🤔 Не уверен, куда сохранить эту заметку.\nВыберите подходящую тему:",
                     reply_markup=kb

@@ -10,6 +10,7 @@ Group Topic Commands
 
 import logging
 import html
+import asyncio
 from aiogram import Router, F, Bot
 from aiogram.types import (
     Message, CallbackQuery, BotCommand, 
@@ -98,6 +99,8 @@ async def callback_close_message(callback: CallbackQuery):
 @group_router.message(TopicInitState.waiting_for_description, F.chat.type.in_({"group", "supergroup"}))
 async def process_init_description(message: Message, state: FSMContext):
     """Обработка ввода описания при инициализации."""
+    import asyncio
+    
     data = await state.get_data()
     topic_id = data.get("topic_id")
     group_id = data.get("group_id")
@@ -112,6 +115,10 @@ async def process_init_description(message: Message, state: FSMContext):
     
     description = message.text.strip()
     
+    # Игнорируем команды бота
+    if description.startswith("/"):
+        return
+    
     session_maker = get_async_session_maker()
     async with session_maker() as session:
         topic = await db_service.get_topic(session, group_id, topic_id)
@@ -124,24 +131,33 @@ async def process_init_description(message: Message, state: FSMContext):
     
     await state.clear()
     
+    text = f"✅ <b>Тема настроена!</b>\n\n📝 {description}"
+    
+    # Helper для автоудаления
+    async def delete_later(msg, delay: int = 10):
+        await asyncio.sleep(delay)
+        await delete_message_safe(msg)
+    
     # Редактируем сообщение бота, если есть ID
     if bot_message_id:
         try:
             await message.bot.edit_message_text(
                 chat_id=message.chat.id,
                 message_id=bot_message_id,
-                text=f"✅ <b>Тема настроена!</b>\n\n📝 {description}",
+                text=text,
                 reply_markup=get_topic_settings_keyboard(topic_id)
             )
             return
         except Exception:
-            pass
+            # Если не удалось отредактировать — удаляем старое
+            try:
+                await message.bot.delete_message(message.chat.id, bot_message_id)
+            except Exception:
+                pass
     
-    # Если редактирование не удалось, отправляем новое
-    await message.answer(
-        f"✅ <b>Тема настроена!</b>\n\n📝 {description}",
-        reply_markup=get_topic_settings_keyboard(topic_id)
-    )
+    # Отправляем новое сообщение (будет удалено через 10 сек)
+    confirm_msg = await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
+    asyncio.create_task(delete_later(confirm_msg))
 
 
 # ============ /rules Command ============
@@ -202,6 +218,12 @@ async def process_rules_input(message: Message, state: FSMContext):
 
 async def _save_topic_rules(message: Message, topic_id: int, rules_text: str, bot_message_id: int = None):
     """Сохранить описание темы."""
+    import asyncio
+    
+    # Игнорируем команды бота
+    if rules_text.startswith("/"):
+        return
+    
     session_maker = get_async_session_maker()
     async with session_maker() as session:
         user = await db_service.get_or_create_user(session, message.from_user.id)
@@ -219,7 +241,13 @@ async def _save_topic_rules(message: Message, topic_id: int, rules_text: str, bo
         
         text = f"✅ Описание обновлено:\n\n{rules_text}"
         
+        # Helper для автоудаления
+        async def delete_later(msg, delay: int = 10):
+            await asyncio.sleep(delay)
+            await delete_message_safe(msg)
+        
         if bot_message_id:
+            # Редактируем существующее сообщение бота
             try:
                 await message.bot.edit_message_text(
                     chat_id=message.chat.id,
@@ -227,10 +255,17 @@ async def _save_topic_rules(message: Message, topic_id: int, rules_text: str, bo
                     text=text,
                     reply_markup=get_topic_settings_keyboard(topic_id)
                 )
+                return
             except Exception:
-                await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
-        else:
-             await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
+                # Если не удалось отредактировать — удаляем старое
+                try:
+                    await message.bot.delete_message(message.chat.id, bot_message_id)
+                except Exception:
+                    pass
+        
+        # Отправляем новое сообщение (будет удалено через 10 сек)
+        confirm_msg = await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
+        asyncio.create_task(delete_later(confirm_msg))
 
 
 # ============ /format Command ============
@@ -343,6 +378,16 @@ async def process_format_input(message: Message, state: FSMContext):
 
 async def _save_topic_format(message: Message, topic_id: int, format_text: str, bot_message_id: int = None):
     """Сохранить формат заметок."""
+    import asyncio
+    
+    # Игнорируем команды бота (тихо, без сообщения)
+    if format_text.startswith("/"):
+        return
+    
+    # Сброс формата на значение по умолчанию
+    if format_text.lower() in ("сброс", "reset", "default", ""):
+        format_text = None
+    
     session_maker = get_async_session_maker()
     async with session_maker() as session:
         user = await db_service.get_or_create_user(session, message.from_user.id)
@@ -355,11 +400,21 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str, 
         topic.format_policy_text = format_text
         await session.commit()
         
-        logger.info(f"[FORMAT] Тема {topic_id}: {format_text[:50]}...")
+        display_format = format_text or DEFAULT_FORMAT
+        logger.info(f"[FORMAT] Тема {topic_id}: {display_format[:50]}...")
         
-        text = f"✅ Формат заметок задан:\n\n{format_text}"
+        if format_text:
+            text = f"✅ Формат заметок задан:\n\n<pre>{html.escape(format_text)}</pre>"
+        else:
+            text = f"✅ Формат сброшен на значение по умолчанию:\n\n<pre>{html.escape(DEFAULT_FORMAT)}</pre>"
+        
+        # Helper для автоудаления
+        async def delete_later(msg, delay: int = 10):
+            await asyncio.sleep(delay)
+            await delete_message_safe(msg)
         
         if bot_message_id:
+            # Редактируем существующее сообщение бота
             try:
                 await message.bot.edit_message_text(
                     chat_id=message.chat.id,
@@ -367,10 +422,17 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str, 
                     text=text,
                     reply_markup=get_topic_settings_keyboard(topic_id)
                 )
+                return
             except Exception:
-                await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
-        else:
-             await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
+                # Если не удалось отредактировать — удаляем старое и создаём новое
+                try:
+                    await message.bot.delete_message(message.chat.id, bot_message_id)
+                except Exception:
+                    pass
+        
+        # Отправляем новое сообщение (будет удалено через 10 сек)
+        confirm_msg = await message.answer(text, reply_markup=get_topic_settings_keyboard(topic_id))
+        asyncio.create_task(delete_later(confirm_msg))
 
 
 # ============ /info Command ============
@@ -378,7 +440,8 @@ async def _save_topic_format(message: Message, topic_id: int, format_text: str, 
 @group_router.message(Command("info"), F.chat.type.in_({"group", "supergroup"}))
 async def cmd_topic_info(message: Message, state: FSMContext):
     """
-    Команда /info — универсальная команда управления темой.
+    Команда /info — управление настройками темы.
+    Вызывается через меню команд бота (кнопка / в интерфейсе).
     """
     await delete_message_safe(message)
     
@@ -427,13 +490,20 @@ async def cmd_topic_info(message: Message, state: FSMContext):
             return
         
         description = topic.description
-        format_text = topic.format_policy_text or "<i>по умолчанию</i>"
+        format_text = topic.format_policy_text or DEFAULT_FORMAT
         status = "✅ Активна" if topic.is_active else "⏸ Неактивна"
         
+        # Отображаем формат: экранируем только если это пользовательский формат
+        if topic.format_policy_text:
+            format_display = f"<pre>{html.escape(format_text)}</pre>"
+        else:
+            format_display = f"<i>по умолчанию</i>\n<pre>{html.escape(DEFAULT_FORMAT)}</pre>"
+        
+        # Отправляем настройки с Inline кнопками для редактирования
         await message.answer(
             f"ℹ️ <b>Настройки темы</b>\n\n"
             f"📝 <b>Описание:</b>\n{description}\n\n"
-            f"📋 <b>Формат:</b>\n<pre>{html.escape(format_text)}</pre>\n\n"
+            f"📋 <b>Формат:</b>\n{format_display}\n\n"
             f"Статус: {status}",
             reply_markup=get_topic_settings_keyboard(topic_id)
         )

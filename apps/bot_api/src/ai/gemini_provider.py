@@ -125,7 +125,8 @@ class GeminiProvider(AIProvider):
             "Task:\n"
             "1. 'title': Create a short, descriptive emoji title in Russian (max 5-7 words).\n"
             "2. 'content': Create a concise summary (caption) of the note in Russian. Fix grammar, remove redundancy.\n"
-            "3. 'tags': Extract key tags (hashtags) in Russian.\n\n"
+            "3. 'tags': Extract key tags (hashtags) in Russian.\n"
+            "CRITICAL: If the text contains links (URLs), YOU MUST INCLUDE THEM ALL in the 'content' field EXACTLY AS THEY ARE. Do not shorten, do not remove, do not move to title. Just keep them in the text flow.\n\n"
             "Return JSON only: {\"title\": \"...\", \"content\": \"...\", \"tags\": [\"#tag1\", ...]}"
         )
 
