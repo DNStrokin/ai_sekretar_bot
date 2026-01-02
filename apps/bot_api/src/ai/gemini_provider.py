@@ -27,9 +27,9 @@ class GeminiProvider(AIProvider):
         else:
             genai.configure(api_key=self.api_key)
             genai.configure(api_key=self.api_key)
-            # Используем gemini-2.5-flash-lite (так как 1.5 не доступна для этого ключа/среды)
+            # Используем gemini-3-flash-preview по запросу пользователя
             try:
-                self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
+                self.model = genai.GenerativeModel('gemini-3-flash-preview')
             except Exception:
                 # Fallback
                 self.model = genai.GenerativeModel('gemini-flash-latest') 

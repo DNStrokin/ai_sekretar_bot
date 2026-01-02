@@ -5,6 +5,10 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/).
 Проект следует [Семантическому версионированию](https://semver.org/lang/ru/).
 
+## [Unreleased]
+### Изменено
+- Обновлена модель Gemini на `gemini-3-flash-preview`.
+
 ## [0.2.1] - 2025-12-28
 
 ### Изменено
