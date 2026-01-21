@@ -56,8 +56,11 @@ class GeminiProvider(AIProvider):
             "You are a smart assistant that sorts notes into topics.\n"
             f"Allowed topics: {topics_str}\n\n"
             "Task: Analyze the user's note. Identify ALL topics that might be relevant.\n"
-            "Assign a confidence score (0.0 to 1.0) to each relevant topic.\n"
-            "If the note is completely unrelated to any existing topic, include {\"id\": 0, \"confidence\": 1.0}.\n\n"
+            "Assign a confidence score (0.0 to 1.0) to each relevant topic.\n\n"
+            "IMPORTANT:\n"
+            "1. If the note doesn't match a specific topic, check if there's a 'General', 'Misc', or 'Other' topic (e.g., 'Прочее', 'Все остальное', 'Буфер').\n"
+            "2. IF SUCH A GENERAL TOPIC EXISTS, use it instead of returning ID 0.\n"
+            "3. Only return {\"id\": 0, \"confidence\": 1.0} if NO TOPIC is relevant AND NO GENERAL TOPIC is found.\n\n"
             "Return JSON only: {\"candidates\": [{\"id\": <topic_id>, \"confidence\": <score>}, ...]}"
         )
         
@@ -67,39 +70,49 @@ class GeminiProvider(AIProvider):
         # Для надежности можно использовать generation_config={'response_mime_type': 'application/json'}
         # если модель поддерживает. gemini-1.5-flash поддерживает.
         
-        response = await self.model.generate_content_async(
-            [prompt, note_text],
-            generation_config={"response_mime_type": "application/json"}
-        )
-        
-        content = response.text
-        data = json.loads(content)
-        
-        candidates = data.get("candidates", [])
-        if not candidates:
-             # Fallback logic if structure differs or empty
-             old_id = data.get("id", 0)
-             candidates = [{"id": old_id, "confidence": data.get("confidence", 1.0)}]
-
-        # Sort by confidence desc
-        candidates.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-        
-        # Filter invalid topics
-        valid_candidates = [
-            c for c in candidates 
-            if c["id"] == 0 or any(t.topic_id == c["id"] for t in topics)
-        ]
-        
-        if not valid_candidates:
-            valid_candidates = [{"id": 0, "confidence": 1.0}]
+        try:
+            # Gemini требует явного указания MIME типа для JSON режима в некоторых версиях,
+            # но простой промпт "Return JSON only" обычно работает.
+            # Для надежности можно использовать generation_config={'response_mime_type': 'application/json'}
+            # если модель поддерживает. gemini-1.5-flash поддерживает.
             
-        best = valid_candidates[0]
-        
-        return ClassificationResult(
-            suggested_topic_id=best["id"],
-            top_topics=[{"topic_id": c["id"], "confidence": c.get("confidence", 0.0)} for c in valid_candidates],
-            need_new_topic=(best["id"] == 0)
-        )
+            response = await self.model.generate_content_async(
+                [prompt, note_text],
+                generation_config={"response_mime_type": "application/json"}
+            )
+            
+            content = response.text
+            data = json.loads(content)
+            
+            candidates = data.get("candidates", [])
+            if not candidates:
+                 # Fallback logic if structure differs or empty
+                 old_id = data.get("id", 0)
+                 candidates = [{"id": old_id, "confidence": data.get("confidence", 1.0)}]
+
+            # Sort by confidence desc
+            candidates.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+            
+            # Filter invalid topics
+            valid_candidates = [
+                c for c in candidates 
+                if c["id"] == 0 or any(t.topic_id == c["id"] for t in topics)
+            ]
+            
+            if not valid_candidates:
+                valid_candidates = [{"id": 0, "confidence": 1.0}]
+                
+            best = valid_candidates[0]
+            
+            return ClassificationResult(
+                suggested_topic_id=best["id"],
+                top_topics=[{"topic_id": c["id"], "confidence": c.get("confidence", 0.0)} for c in valid_candidates],
+                need_new_topic=(best["id"] == 0)
+            )
+
+        except Exception as e:
+            logger.error(f"Error classifying note with Gemini: {e}")
+            return ClassificationResult(suggested_topic_id=0, top_topics=[], need_new_topic=True)
 
         # except Exception as e:
         #     logger.error(f"Error classifying note with Gemini: {e}")
@@ -131,26 +144,31 @@ class GeminiProvider(AIProvider):
         )
 
         # try:
-        response = await self.model.generate_content_async(
-            [prompt, note_text],
-            generation_config={"response_mime_type": "application/json"}
-        )
-        
-        content = response.text
-        data = json.loads(content)
-        
-        title = data.get("title", "Заметка")
-        formatted_content = data.get("content", note_text)
-        tags = data.get("tags", [])
-        
-        # Ensure tags start with #
-        formatted_tags = [t if t.startswith('#') else f"#{t}" for t in tags]
-        
-        return RenderedNote(
-            title=title,
-            content=formatted_content,
-            tags=formatted_tags
-        )
+        try:
+            response = await self.model.generate_content_async(
+                [prompt, note_text],
+                generation_config={"response_mime_type": "application/json"}
+            )
+            
+            content = response.text
+            data = json.loads(content)
+            
+            title = data.get("title", "Заметка")
+            formatted_content = data.get("content", note_text)
+            tags = data.get("tags", [])
+            
+            # Ensure tags start with #
+            formatted_tags = [t if t.startswith('#') else f"#{t}" for t in tags]
+            
+            return RenderedNote(
+                title=title,
+                content=formatted_content,
+                tags=formatted_tags
+            )
+
+        except Exception as e:
+            logger.error(f"Error rendering note with Gemini: {e}")
+            return RenderedNote(title="Заметка", content=note_text, tags=[])
 
         # except Exception as e:
         #     logger.error(f"Error rendering note with Gemini: {e}")

@@ -295,11 +295,23 @@ async def _process_group_message(message: Message):
             sorted_topics = sorted(classification.top_topics, key=lambda x: x['confidence'], reverse=True)
             valid_candidates = [t for t in sorted_topics if t['topic_id'] != 0 and t['confidence'] > 0.4]
             
-            is_ambiguous = False
-            if len(valid_candidates) > 1:
-                # Если разница между первым и вторым небольшая (например < 0.2), или просто > 1 кандидата с высокой уверенностью?
-                # Давайте будем считать неоднозначным, если есть 2+ кандидата с уверенностью > 0.4
-                is_ambiguous = True
+            # FALLBACK LOGIC: Ищем тему "Прочее", если ИИ не уверен
+            if target_topic_id == 0 or not valid_candidates:
+                keywords = ["прочее", "другое", "general", "общ", "не связано", "остальн"]
+                fallback_topic = next(
+                    (t for t in topics if any(k in (t.title or "").lower() or k in (t.description or "").lower() for k in keywords)),
+                    None
+                )
+                if fallback_topic:
+                    logger.info(f"Fallback matched topic: {fallback_topic.telegram_topic_id} ({fallback_topic.title})")
+                    target_topic_id = fallback_topic.telegram_topic_id
+                    valid_candidates = [{'topic_id': target_topic_id, 'confidence': 1.0}]
+                    # Сбрасываем неоднозначность для фоллбэка
+                    is_ambiguous = False
+                else:
+                    is_ambiguous = False # If no fallback, let it fail below
+            else:
+                is_ambiguous = len(valid_candidates) > 1
 
             logger.info(f"Target: {target_topic_id}, Ambiguous: {is_ambiguous}, Candidates: {valid_candidates}")
             
